@@ -183,7 +183,8 @@ class RepairAttempt(Model):
 
 
 class GeneratedBy(Model):
-    model: str = "human"
+    model: str = "human"  # "human" for hand-written tasks
+    author: str | None = None  # who wrote or added the task, for human-authored tasks
     prompt_hash: str | None = None
     seed: int | None = None
     repair_attempts: list[RepairAttempt] = Field(default_factory=list)

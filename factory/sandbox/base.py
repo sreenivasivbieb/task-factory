@@ -19,7 +19,7 @@ from ..models import EnvConfig, ExecResult, ImageRef, RepoSpec, slugify
 log = logging.getLogger("factory.sandbox")
 
 # Bump when the generated Dockerfile changes, so cached images are rebuilt.
-PRELUDE_VERSION = "2"
+PRELUDE_VERSION = "3"
 
 # Fixed environment inside every sandbox.
 FIXED_ENV = {"TZ": "UTC", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0",
@@ -27,6 +27,9 @@ FIXED_ENV = {"TZ": "UTC", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONHASHSEE
 
 # Files the factory writes inside the repo; ignored by git in the sandbox.
 SCRATCH_DIR = ".factory"
+
+# Git tag on the starting commit inside every sandbox (survives commits made by an agent).
+BASE_TAG = "factory-base"
 
 TRUNCATION_MARKER = "\n...[truncated by factory: output over {limit} bytes]...\n"
 
@@ -57,7 +60,7 @@ def git_archive(spec: RepoSpec, out_tar: Path) -> Path:
 BASE_COMMIT_SH = (
     "git init -q && git add -A && "
     "git -c user.name=factory -c user.email=factory@localhost -c commit.gpgsign=false "
-    "commit -q --allow-empty -m base && "
+    "commit -q --allow-empty -m base && git tag factory-base && "
     f"mkdir -p {SCRATCH_DIR} && printf '%s\\n' {SCRATCH_DIR}/ '*.egg-info/' node_modules/ __pycache__/ "
     "'.pytest_cache/' >> .git/info/exclude"
 )
@@ -87,8 +90,12 @@ class Sandbox(abc.ABC):
 
     @abc.abstractmethod
     def exec(self, argv: list[str], *, timeout_s: int, env: dict | None = None,
-             cwd: str | None = None) -> ExecResult:
-        """Run ``argv``. Never raises for a non-zero exit code."""
+             cwd: str | None = None, secret_env: dict | None = None) -> ExecResult:
+        """Run ``argv``. Never raises for a non-zero exit code.
+
+        ``secret_env`` values (API keys) are passed without appearing on any
+        command line or in logs.
+        """
 
     @abc.abstractmethod
     def write_file(self, path: str, content: str | bytes) -> None:
@@ -130,3 +137,7 @@ class SandboxFactory(abc.ABC):
     @abc.abstractmethod
     def new_sandbox(self, image: ImageRef, *, network: bool = False) -> Sandbox:
         """Start a fresh sandbox from an image."""
+
+    @abc.abstractmethod
+    def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
+        """Build an image on top of ``base`` that runs ``commands`` as root (e.g. install an agent)."""

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -58,6 +59,29 @@ class DockerSandboxFactory(SandboxFactory):
             raise BuildError(f"image build failed for {spec.name}@{spec.short_sha}", r.stdout + r.stderr)
         return ImageRef(tag=tag, backend="docker")
 
+    def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
+        if not commands:
+            return base
+        import hashlib
+        import json
+
+        digest = hashlib.sha256(json.dumps([base.tag, commands]).encode()).hexdigest()[:16]
+        tag = f"{base.tag.split(':')[0]}-{name}:{digest}"
+        if self.image_exists(tag):
+            return ImageRef(tag=tag, backend="docker")
+        lines = [f"FROM {base.tag}", "USER root"] + [f"RUN {c}" for c in commands]
+        lines.append("RUN (id factory >/dev/null 2>&1 && chown -R factory /repo) || true")
+        with tempfile.TemporaryDirectory(prefix="factory-derived-") as ctx:
+            (Path(ctx) / "Dockerfile").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            try:
+                r = self._run(["build", "-t", tag, ctx], timeout=self.cfg.build_timeout_s)
+            except subprocess.TimeoutExpired as exc:
+                raise BuildError(f"derived image build timed out ({name})", str(exc.output or "")) from exc
+        if r.returncode != 0:
+            raise BuildError(f"derived image build failed ({name})", r.stdout + r.stderr)
+        log.info("built derived image %s", tag)
+        return ImageRef(tag=tag, backend="docker")
+
     def _user_for(self, tag: str) -> str | None:
         """Run as the non-root 'factory' user when the image has one."""
         if tag not in self._users:
@@ -94,7 +118,7 @@ class DockerSandbox(Sandbox):
         self._closed = False
 
     def _exec_prefix(self, *, interactive: bool = False, env: dict | None = None,
-                     cwd: str | None = None) -> list[str]:
+                     cwd: str | None = None, secret_names: list[str] | None = None) -> list[str]:
         cmd = [self.bin, "exec"]
         if interactive:
             cmd.append("-i")
@@ -104,14 +128,18 @@ class DockerSandbox(Sandbox):
             cmd += ["-w", cwd]
         for k, v in (env or {}).items():
             cmd += ["-e", f"{k}={v}"]
+        for k in secret_names or []:
+            cmd += ["-e", k]  # value comes from the docker CLI's own environment
         return cmd + [self.cid]
 
     def exec(self, argv: list[str], *, timeout_s: int, env: dict | None = None,
-             cwd: str | None = None) -> ExecResult:
+             cwd: str | None = None, secret_env: dict | None = None) -> ExecResult:
         self._ensure_open()
-        cmd = self._exec_prefix(env=env, cwd=cwd) + list(argv)
+        secret_env = secret_env or {}
+        cmd = self._exec_prefix(env=env, cwd=cwd, secret_names=sorted(secret_env)) + list(argv)
         start = time.monotonic()
-        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc_env = {**os.environ, **secret_env} if secret_env else None
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=proc_env)
         timed_out = False
         try:
             out, err = proc.communicate(timeout=timeout_s)

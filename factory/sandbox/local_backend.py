@@ -65,6 +65,12 @@ class LocalSandboxFactory(SandboxFactory):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         return self.cache_dir
 
+    def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
+        if commands:
+            log.warning("local backend does not run image commands for %s (the host must already have them): %s",
+                        name, commands)
+        return base
+
     def new_sandbox(self, image: ImageRef, *, network: bool = False) -> "LocalSandbox":
         log.warning(_WARNING)
         if image.location is None:
@@ -99,10 +105,10 @@ class LocalSandbox(Sandbox):
         return p
 
     def exec(self, argv: list[str], *, timeout_s: int, env: dict | None = None,
-             cwd: str | None = None) -> ExecResult:
+             cwd: str | None = None, secret_env: dict | None = None) -> ExecResult:
         if self._closed:
             raise SandboxRuntimeError("sandbox is closed")
-        full_env = {**_host_env(), **FIXED_ENV, "TMPDIR": str(self.tmp), **(env or {})}
+        full_env = {**_host_env(), **FIXED_ENV, "TMPDIR": str(self.tmp), **(env or {}), **(secret_env or {})}
         workdir = self._path(cwd) if cwd and not cwd.startswith("/") else self.repo
         start = time.monotonic()
         proc = subprocess.Popen(argv, cwd=workdir, env=full_env, stdout=subprocess.PIPE,

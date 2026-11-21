@@ -38,6 +38,11 @@ class GenerationConfig(_Section):
     overgeneration_factor: int = 3
 
 
+class HarnessConfig(_Section):
+    agents: dict[str, dict] = Field(default_factory=dict)  # custom agents, see harness/agents.py
+    k: int = 1
+
+
 class EnvOverrides(_Section):
     """Optional overrides applied on top of the inspector's EnvConfig."""
 
@@ -68,6 +73,7 @@ class FactoryConfig(_Section):
     gates: GatesConfig = Field(default_factory=GatesConfig)
     generation: GenerationConfig = Field(default_factory=GenerationConfig)
     env: EnvOverrides = Field(default_factory=EnvOverrides)
+    harness: HarnessConfig = Field(default_factory=HarnessConfig)
 
     @classmethod
     def load(cls, path: Path | None) -> "FactoryConfig":

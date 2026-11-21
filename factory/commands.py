@@ -8,10 +8,15 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
+import shutil
+import sys
+from pathlib import Path
 
 from .config import FactoryConfig
 from .errors import ConfigError
 from .models import EnvConfig, InspectResult, RepoSpec
+from .review.store import TRASH, TaskStore
 from .state import Workdir
 
 log = logging.getLogger("factory.commands")
@@ -136,7 +141,276 @@ def cmd_export(args: argparse.Namespace, cfg: FactoryConfig) -> int:
         report = ValidationReport.load(report_path)
         if report.verdict != "valid" or not draft_path.exists():
             continue
-        write_package(TaskDraft.load(draft_path), report, spec, env, args.out)
+        out = args.out or wd.tasks
+        if (Path(out) / TRASH / report.task_id).exists():
+            log.info("%s was deleted by a reviewer; not exported again", report.task_id)
+            continue
+        write_package(TaskDraft.load(draft_path), report, spec, env, out)
         written += 1
-    print(f"exported {written} package(s) to {args.out}")
+    print(f"exported {written} package(s) to {args.out or wd.tasks}"
+          + ("" if args.out else "  (review them with: factory review)"))
     return 0 if written else 4
+
+
+# =========================================================================== human review
+
+
+def _console():
+    from rich.console import Console
+
+    return Console(highlight=False)
+
+
+def _store_of(args: argparse.Namespace, cfg: FactoryConfig) -> TaskStore:
+    return TaskStore(args.store or Workdir(cfg.workdir).tasks)
+
+
+def cmd_tasks_list(args, cfg) -> int:
+    from .review import render
+
+    store = _store_of(args, cfg)
+    entries = store.entries(args.status)
+    console = _console()
+    if not entries:
+        console.print(f"no {args.status if args.status != 'all' else ''} tasks in {store.root}".replace("  ", " "))
+        return 0
+    console.print(render.tasks_table(entries))
+    c = store.summary()["counts"]
+    console.print(f"[yellow]{c['pending']} pending[/]  [green]{c['approved']} approved[/]  "
+                  f"[red]{c['deleted']} deleted[/]   store: {store.root}")
+    return 0
+
+
+def cmd_tasks_show(args, cfg) -> int:
+    from .review import render
+
+    render.show(_console(), _store_of(args, cfg).get(args.task_id), args.section)
+    return 0
+
+
+def cmd_tasks_approve(args, cfg) -> int:
+    store = _store_of(args, cfg)
+    for tid in args.task_ids:
+        e = store.approve(tid, args.note)
+        print(f"approved  {e.task_id}")
+    return 0
+
+
+def cmd_tasks_delete(args, cfg) -> int:
+    store = _store_of(args, cfg)
+    for tid in args.task_ids:
+        e = store.delete(tid, args.reason)
+        print(f"deleted   {e.task_id}  (moved to {store.trash}; undo: factory tasks restore {e.task_id})")
+    return 0
+
+
+def cmd_tasks_restore(args, cfg) -> int:
+    store = _store_of(args, cfg)
+    for tid in args.task_ids:
+        e = store.restore(tid)
+        print(f"restored  {e.task_id}  (pending)")
+    return 0
+
+
+def cmd_tasks_new(args, cfg) -> int:
+    from .review.authoring import scaffold_draft
+    from .review.store import default_reviewer
+
+    root = args.dir or Workdir(cfg.workdir).drafts
+    tags = [t.strip() for t in args.tags.split(",") if t.strip()]
+    path = scaffold_draft(Path(root) / args.name, args.title or args.name.replace("-", " ").replace("_", " "),
+                          args.kind, tags, default_reviewer())
+    print(f"draft created at {path}")
+    print(f"  1. read {path / 'HOW_TO.md'}")
+    print("  2. write requirements.md, put changed files in after/ and hidden tests in tests/")
+    print(f"  3. factory tasks add {path}")
+    return 0
+
+
+def _print_report(report) -> None:
+    console = _console()
+    for g in report.gates:
+        mark = "[green]pass[/]" if g.passed else "[red]FAIL[/]"
+        console.print(f"  {g.gate}  {mark}  {g.details}")
+
+
+def cmd_tasks_add(args, cfg) -> int:
+    from .review.authoring import add_task
+    from .sandbox import make_factory
+
+    spec, env = load_state(cfg)
+    store = _store_of(args, cfg)
+    result = add_task(args.draft, spec, env, make_factory(cfg), cfg, store, author=args.author,
+                      approve=not args.pending, log_dir=Workdir(cfg.workdir).runs)
+    _print_report(result.report)
+    if result.package is None:
+        print(f"NOT added: {result.report.reject_code.value}: {result.report.reject_reason}")
+        print(f"logs: {Workdir(cfg.workdir).runs / result.draft.task_id}")
+        return 4
+    print(f"added {result.draft.task_id} ({'pending' if args.pending else 'approved'}) -> {result.package}")
+    return 0
+
+
+def cmd_tasks_edit(args, cfg) -> int:
+    from .review.authoring import apply_edit, package_to_draft
+    from .sandbox import make_factory
+
+    store = _store_of(args, cfg)
+    entry = store.get(args.task_id)
+    draft_dir = Workdir(cfg.workdir).edits / entry.task_id
+    if not args.apply:
+        package_to_draft(entry.path, draft_dir)
+        print(f"editable copy at {draft_dir}")
+        print("  edit requirements.md, solution.diff or tests/, then run:")
+        print(f"  factory tasks edit {entry.task_id} --apply --reason \"what you changed and why\"")
+        return 0
+    if not draft_dir.exists():
+        raise ConfigError(f"no draft at {draft_dir}; run 'factory tasks edit {entry.task_id}' first")
+    result = apply_edit(store, entry.task_id, draft_dir, args.reason or "", make_factory(cfg), cfg,
+                        log_dir=Workdir(cfg.workdir).runs)
+    _print_report(result.report)
+    if result.package is None:
+        print(f"edit NOT applied (package unchanged): {result.report.reject_code.value}: {result.report.reject_reason}")
+        return 4
+    print(f"edited {entry.task_id}: re-validated, marked as a manual edit, back to pending")
+    return 0
+
+
+def cmd_tasks_publish(args, cfg) -> int:
+    store = _store_of(args, cfg)
+    wanted = [e for e in store.entries() if e.status == "approved" or (args.include_pending and e.status == "pending")]
+    if not wanted:
+        print("nothing to publish: no approved tasks (approve with 'factory review' or 'factory tasks approve')")
+        return 4
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    for e in wanted:
+        if args.format == "harbor":
+            from .packaging.harbor import to_harbor
+
+            to_harbor(e.path, out)
+        else:
+            dest = out / e.task_id
+            if dest.exists():
+                shutil.rmtree(dest)
+            shutil.copytree(e.path, dest)
+    store.write_summary(out / "review_summary.json")
+    print(f"published {len(wanted)} task(s) to {out} ({args.format} format); review_summary.json lists deletions "
+          "and manual edits")
+    if args.format == "harbor":
+        print(f"  run them with Harbor:  harbor run -p {out} -a oracle")
+    return 0
+
+
+def cmd_tasks_summary(args, cfg) -> int:
+    import json
+
+    print(json.dumps(_store_of(args, cfg).summary(), indent=2))
+    return 0
+
+
+def cmd_review(args, cfg) -> int:
+    from .review.authoring import apply_edit, package_to_draft
+    from .review.interactive import review_loop
+    from .sandbox import make_factory
+
+    store = _store_of(args, cfg)
+    console = _console()
+    if not sys.stdin.isatty():
+        raise ConfigError("factory review is interactive; use 'factory tasks list/show/approve/delete' in scripts")
+
+    def ask(prompt: str) -> str:
+        try:
+            return input(prompt)
+        except EOFError:
+            return "q"
+
+    def edit(entry):
+        draft_dir = Workdir(cfg.workdir).edits / entry.task_id
+        package_to_draft(entry.path, draft_dir)
+        editor = os.environ.get("EDITOR")
+        console.print(f"editable copy at [bold]{draft_dir}[/]")
+        if editor:
+            import shlex
+            import subprocess
+
+            subprocess.call([*shlex.split(editor), str(draft_dir)])
+        if ask("press Enter when done editing (or type 'cancel')> ").strip().lower() == "cancel":
+            return None
+        reason = ask("what did you change and why? (required)> ").strip()
+        if not reason:
+            return "[red]no reason given; edit not applied[/]"
+        result = apply_edit(store, entry.task_id, draft_dir, reason, make_factory(cfg), cfg,
+                            log_dir=Workdir(cfg.workdir).runs)
+        if result.package is None:
+            return f"[red]edit rejected by {result.report.reject_code.value}[/]: {result.report.reject_reason}"
+        return "[green]edit applied and re-validated[/] (marked as a manual edit)"
+
+    review_loop(store, console, ask, status=args.status, edit=edit)
+    return 0
+
+
+# =========================================================================== harness
+
+
+def cmd_harness_agents(args, cfg) -> int:
+    from rich.table import Table
+
+    from .harness.agents import agent_registry
+
+    t = Table(header_style="bold")
+    for col in ("agent", "description", "needs", "state"):
+        t.add_column(col, overflow="fold")
+    for name, a in agent_registry(cfg.harness.agents).items():
+        t.add_row(name, a.description, " or ".join(a.secrets) or "-", "experimental" if a.experimental else "ready")
+    t.add_row("command", "any shell command: --cmd 'tool {instruction_file}'", "-", "ready")
+    _console().print(t)
+    return 0
+
+
+def cmd_harness_run(args, cfg) -> int:
+    from rich.table import Table
+
+    from .harness.agents import get_agent
+    from .harness.runner import Harness
+    from .sandbox import make_factory
+
+    agent = get_agent(args.agent, cfg.harness.agents, args.cmd)
+    if args.timeout:
+        agent = agent.model_copy(update={"timeout_s": args.timeout})
+    if args.tasks:
+        root = Path(args.tasks)
+        packages = [root] if (root / "task.toml").exists() else sorted(
+            p for p in root.iterdir() if (p / "task.toml").exists())
+        store = None
+    else:
+        store = _store_of(args, cfg)
+        packages = [e.path for e in store.entries() if e.status != "deleted"
+                    and (args.status == "all" or e.status == args.status)]
+    if args.task:
+        packages = [p for p in packages if any(p.name == t or p.name.startswith(t) for t in args.task)]
+    if not packages:
+        raise ConfigError("no task packages to run on")
+    console = _console()
+    console.print(f"running [bold]{agent.name}[/] on {len(packages)} task(s), k={args.k or cfg.harness.k}")
+
+    def on_result(r):
+        style = "green" if r.resolved else "red"
+        console.print(f"  [{style}]{r.category:16}[/] {r.task_id} (attempt {r.attempt}, agent {r.agent_duration_s}s)")
+
+    harness = Harness(make_factory(cfg), cfg, Workdir(cfg.workdir).harness)
+    try:
+        summary = harness.run(packages, agent, model=args.model, k=args.k or cfg.harness.k, on_result=on_result)
+    finally:
+        harness.close()
+    t = Table(header_style="bold", title=f"{agent.name} · resolved@{summary.k} {summary.resolved_at_k:.0%} · "
+                                         f"pass rate {summary.pass_rate:.0%}")
+    for col in ("task", "resolved", "difficulty"):
+        t.add_column(col)
+    for ts in summary.per_task:
+        t.add_row(ts.task_id, f"{ts.resolved}/{ts.attempts}", ts.difficulty)
+        if store is not None and ts.difficulty == "unsolved" and agent.kind == "command":
+            store.note(ts.task_id, f"unsolved by {agent.name} in {ts.attempts} attempt(s); check it is solvable")
+    console.print(t)
+    console.print(f"results: {Workdir(cfg.workdir).harness / summary.run_id}")
+    return 0

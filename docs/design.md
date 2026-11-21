@@ -19,12 +19,15 @@ deviation see [decisions.md](decisions.md).
 9. [Validation runner: the gates](#9-validation-runner-the-gates)
 10. [Mutation engine: negative controls](#10-mutation-engine-negative-controls)
 11. [Task packages](#11-task-packages)
-12. [Life of a task](#12-life-of-a-task)
-13. [Reproducibility guarantees](#13-reproducibility-guarantees)
-14. [How it is tested](#14-how-it-is-tested)
-15. [Extending task-factory](#15-extending-task-factory)
-16. [Roadmap](#16-roadmap)
-17. [Glossary](#17-glossary)
+12. [Human review and authoring](#12-human-review-and-authoring)
+13. [Coding harness](#13-coding-harness)
+14. [Harbor compatibility](#14-harbor-compatibility)
+15. [Life of a task](#15-life-of-a-task)
+16. [Reproducibility guarantees](#16-reproducibility-guarantees)
+17. [How it is tested](#17-how-it-is-tested)
+18. [Extending task-factory](#18-extending-task-factory)
+19. [Roadmap](#19-roadmap)
+20. [Glossary](#20-glossary)
 
 ---
 
@@ -41,7 +44,9 @@ must come with evidence that it is valid.
 | Repeatable | Pinned commit, image tag derived from inputs, fixed environment variables, deterministic task IDs and checksums |
 | Auditable | Every gate keeps its command, exit code, output and parsed results as a log file inside the package |
 | Isolated and safe | A fresh container per gate, no network, memory/CPU/process limits, non-root user |
-| Honest | Manual edits are flagged; limitations are written down in `decisions.md` |
+| Human judgement | Every valid task waits for a reviewer; only approved tasks are published; deletions need a reason |
+| Measurable | A coding harness runs real agents on the tasks; the oracle must score 100% and an empty agent 0% |
+| Honest | Manual edits and human deletions are disclosed; limitations are written down in `decisions.md` |
 
 **Not in scope:** training models, a web UI, a leaderboard, tasks that need network
 access or external services, and (until the organizers confirm) security or
@@ -53,6 +58,7 @@ exploit-style tasks.
 flowchart TB
     subgraph IN["Input"]
         REPO[("Supplied repository<br/>path · git URL · zip")]
+        HUMAN(["A person's own task<br/>factory tasks new / add"])
     end
 
     subgraph S1["Stage 1 · Environment (built)"]
@@ -76,19 +82,32 @@ flowchart TB
         REJ[(rejections.jsonl)]
     end
 
-    subgraph OUT["Output"]
-        TASKS[("Task packages")]
-        REP["Evidence report<br/>(next)"]
+    subgraph S4["Stage 4 · Human review (built)"]
+        STORE[("Task store<br/>pending")]
+        REV{"Reviewer<br/>approve · delete · edit"}
+        TRASH[(".trash + review log")]
+        STORE --> REV
+        REV -- delete + reason --> TRASH
     end
+
+    subgraph S5["Stage 5 · Use (built)"]
+        PUB[("Published tasks<br/>native · Harbor")]
+        HAR["Coding harness<br/>agents scored by hidden tests"]
+        PUB --> HAR
+    end
+
+    REP["Evidence report<br/>(next)"]
 
     REPO --> LOAD
     IMG --> VAL
     GEN --> VAL
-    VAL -- valid --> VAR --> PKG --> TASKS
+    HUMAN --> VAL
+    VAL -- valid --> VAR --> PKG --> STORE
     VAL -- rejected --> REJ
     REJ -.->|repair strategy| GEN
-    TASKS --> REP
-    REJ --> REP
+    REV -- approve --> PUB
+    HAR -.->|unsolved tasks flagged| REV
+    REJ & TRASH & HAR --> REP
 ```
 
 Three ideas shape the whole system:
@@ -98,7 +117,10 @@ Three ideas shape the whole system:
    only runs code.
 2. **Every step is a pure function of files.** Each command reads JSON from the
    work folder and writes JSON back. Steps can be rerun, resumed and inspected.
-3. **Anything the organizers have not fixed yet sits behind one adapter.** The
+3. **Machines prove validity, people decide quality.** Gates make a broken task
+   impossible to export; a reviewer makes a dull or unclear one impossible to
+   publish. Every human decision is logged and disclosed.
+4. **Anything the organizers have not fixed yet sits behind one adapter.** The
    package layout, the repo delivery format and the LLM provider can each be
    swapped by changing a single module.
 
@@ -114,32 +136,35 @@ flowchart LR
         ERR["errors.py<br/>typed exceptions"]
     end
 
-    subgraph built["Built (M0–M5)"]
+    subgraph built["Built"]
         SB["sandbox/<br/>base · docker_backend · local_backend"]
         RP["repo/<br/>loader · inspector"]
         RN["runner/<br/>test_runner · parsers · node reporter"]
         VA["validation/<br/>gates · mutations · drafts"]
-        PK["packaging/<br/>writer · verify · toml_writer"]
+        PK["packaging/<br/>writer · verify · harbor · toml_writer"]
+        RV["review/<br/>store · render · interactive · authoring"]
+        HN["harness/<br/>agents · runner · protect"]
     end
 
-    subgraph planned["Planned (M6–M12)"]
+    subgraph planned["Planned (M6–M10)"]
         LLM["llm/"]
         GE["generation/"]
         FE["features/"]
         VR["variation/"]
         RE["report/"]
-        BE["benchmark/"]
     end
 
-    CMD --> RP & VA & PK
+    CMD --> RP & VA & PK & RV & HN
     RP --> SB & RN
     VA --> SB & RN
     PK --> VA
+    RV --> VA & PK
+    HN --> SB & RN & PK
     GE --> LLM & VA
     FE --> LLM
 
     classDef plan fill:#f1f5f9,stroke:#94a3b8,color:#334155,stroke-dasharray: 4 3;
-    class LLM,GE,FE,VR,RE,BE plan;
+    class LLM,GE,FE,VR,RE plan;
 ```
 
 Rules the code follows:
@@ -165,8 +190,14 @@ flowchart LR
     C -->|writes| RUN["runs/TASK_ID/<br/>draft.json · report.json · gate logs"]
     C -->|appends| RJ["rejections.jsonl"]
     RUN --> D["factory export"]
-    D -->|writes| PK["OUT/TASK_ID/ packages"]
-    PK --> C
+    D -->|writes| ST["tasks/TASK_ID/<br/>(pending)"]
+    ST --> E["factory review<br/>factory tasks …"]
+    E -->|appends| LOG["tasks/.review/log.jsonl"]
+    E -->|moves| TR["tasks/.trash/"]
+    ST --> F["factory tasks publish"]
+    F -->|writes| PUB["OUT/ approved packages<br/>+ review_summary.json"]
+    ST --> G["factory harness run"]
+    G -->|writes| HR["harness/RUN_ID/<br/>results.jsonl · summary.json"]
 ```
 
 ```text
@@ -178,6 +209,12 @@ workdir/
 ├── cache/baseline/         baseline results, one file per image tag
 ├── runs/<task_id>/         draft.json, report.json, one log file per gate run
 ├── rejections.jsonl        one line per rejected task: code, reason, log paths
+├── tasks/                  the task store: one package per valid task
+│   ├── .review/log.jsonl   every approve / delete / restore / edit, with who, when and why
+│   └── .trash/             deleted packages (restorable)
+├── drafts/<name>/          tasks people are writing (factory tasks new)
+├── edits/<task_id>/        editable copies of packages (factory tasks edit)
+├── harness/<run_id>/       agent runs: per attempt agent.diff, agent log, grade.json; summary.json
 └── logs/run-*.jsonl        structured log of every command, LLM and container call
 ```
 
@@ -555,29 +592,221 @@ flowchart LR
 - The package layout lives in `packaging/writer.py` only. When the organizers
   publish their template, that one module changes.
 
-## 12. Life of a task
+## 12. Human review and authoring
+
+Gates can prove that a task is valid. They cannot tell whether it is worth
+having: whether the requirements read clearly, whether the change is
+realistic, whether it is too easy or a near-copy of another task. That needs a
+person, so review is a first-class step, not an afterthought.
+
+### The task store
+
+Every valid package goes into a **task store** folder (default `workdir/tasks/`).
+The store keeps the packages, a trash folder, and an append-only review log:
+
+```text
+tasks/
+├── toyshop-a471ba4-bulk-discount-on-cart-lines-007/   a package (section 11)
+├── .trash/<task_id>/                                  soft-deleted packages
+└── .review/log.jsonl                                  {"ts", "task_id", "action", "reviewer", "reason"}
+```
+
+The **log is the source of truth** for status. Nothing about review is written
+into the package itself, so reviewing never changes a package's checksums.
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : gates pass (export, or tasks add)
+    pending --> approved : approve
+    pending --> deleted : delete + reason
+    approved --> deleted : delete + reason
+    deleted --> pending : restore
+    approved --> pending : edit (re-validated)
+    pending --> pending : note (e.g. unsolved by an agent)
+    approved --> [*] : publish
+```
+
+| Action | Effect | Recorded |
+| --- | --- | --- |
+| approve | status `approved`; only approved tasks are published | reviewer, optional note |
+| delete | package moves to `.trash/`; status `deleted` | reviewer, **required** reason |
+| restore | package moves back; status `pending` | reviewer |
+| edit | package replaced after re-validation; `manual_edit = true`; status `pending` | reviewer, **required** reason |
+| note | no status change | free text (the harness adds "unsolved by …") |
+
+The reviewer's name comes from `git config user.name` (or the login name) and
+never leaves the machine.
+
+### Reviewing
+
+`factory review` walks through pending tasks one at a time. For each it shows a
+summary panel (status, repo and commit, tags, touched files, test counts,
+mutation score, a coloured pass bar for every gate, the last review events) and
+the instruction exactly as the solver will see it. Single keys open the
+reference diff with syntax colours, the hidden tests, the gate table with log
+paths, or start an edit. The same views are available non-interactively with
+`factory tasks show TASK_ID --section …`, so review also works in scripts and CI.
+
+### Writing your own task
+
+`factory tasks new NAME` scaffolds a draft folder with a `HOW_TO.md` that lists
+what each gate will demand. The author fills in `requirements.md`, the changed
+source files under `after/` (or a `solution.diff`), and the hidden tests under
+`tests/`. `factory tasks add DIR` then runs **all seven gates**; there is no
+shortcut for humans. A task that passes is written to the store, marked
+`generated_by.model = "human"` with the author's name, and approved (or left
+pending with `--pending`). A task that fails writes nothing and prints the gate
+that rejected it.
+
+### Editing a task
+
+`factory tasks edit TASK_ID` unpacks a package into an editable draft
+(`requirements.md`, `solution.diff`, `tests/`). `--apply --reason "…"` re-runs
+the gates on the edited draft. If it is still valid, the package is replaced,
+`manual_edit` and `manual_edit_reason` are set in `task.toml`, and the task goes
+back to `pending` so someone looks at it again. If not, the old package stays
+untouched.
+
+### Publishing
+
+`factory tasks publish --out DIR [--format native|harbor]` copies only approved
+tasks and writes `review_summary.json` beside them: counts per status, every
+deletion with its reason and reviewer, every human-authored task, and every
+manual edit with its reason. That file is the disclosure the organizers ask for.
+
+## 13. Coding harness
+
+The harness runs an AI coding agent on task packages and scores it with the
+hidden tests. It is how we show that tasks are solvable but not trivial, and
+it gives reviewers real evidence (a task nobody solves may be unfair).
+
+### One attempt
+
+```mermaid
+sequenceDiagram
+    participant H as Harness
+    participant F as SandboxFactory
+    participant A as Agent sandbox (network on)
+    participant G as Grading sandbox (network off)
+    H->>F: task image (pinned commit) + agent image (install commands)
+    F-->>A: fresh container, no hidden files
+    H->>A: check no hidden test or solution is present (leak check)
+    H->>A: write .factory/instruction.md, run the agent command
+    Note over A: API keys passed as secret env,<br/>never on a command line or in logs
+    A-->>H: git diff against the factory-base tag
+    F-->>G: fresh container from the task image
+    H->>G: apply the agent's diff
+    H->>G: restore existing test files the agent changed
+    H->>G: write hidden tests, run feature tests + full suite
+    G-->>H: per-test results
+    H->>H: resolved? category? save grade.json
+```
+
+Design choices:
+
+- **Two sandboxes per attempt.** The agent needs network for its model API, so it
+  runs in its own container. Grading happens in a second, fresh, offline
+  container, so nothing the agent left running can interfere.
+- **The agent never sees hidden files.** The agent image is built from the
+  pinned commit only; a leak check confirms the hidden test files and the
+  solution are absent before the agent starts.
+- **`factory-base` tag.** Every image tags its starting commit, so the diff is
+  correct even if the agent makes its own commits.
+- **Tests are protected.** Before grading, tracked test files and test config
+  (`tests/`, `test_*.py`, `*_test.go`, `*.test.js`, `conftest.py`, `src/test/`, …)
+  that the agent changed are restored to the starting version, and the attempt
+  lists them in `tests_tampered`.
+- **Real agents run only in Docker.** The local backend has no isolation, so the
+  harness refuses to run agent presets there; `oracle`, `noop` and `command`
+  are allowed for tests.
+
+### Agents are data
+
+An agent is a small record: install commands (run as root when the agent image
+is built and cached), a run command template, a model flag, and the names of
+the environment variables it may receive.
+
+```toml
+[harness.agents.my-agent]
+install = ["pip install -q my-agent"]
+run = "my-agent --task-file {instruction_file} {model_args}"
+model_flag = "--model {model}"
+secrets = ["MY_API_KEY"]
+```
+
+Built in: `oracle` (applies the reference patch), `noop` (does nothing),
+`command` (any shell command), and presets for Claude Code, Codex CLI, Aider and
+mini-swe-agent.
+
+### Scores
+
+| Category | Meaning |
+| --- | --- |
+| `resolved` | every fail_to_pass and every pass_to_pass test passes |
+| `wrong_behaviour` | some fail_to_pass test fails |
+| `regression` | the feature works but an existing test broke |
+| `build_error` | the tests could not even run |
+| `no_change` | the agent produced no diff |
+| `timeout` | the agent ran out of time |
+| `patch_apply_fail` | the agent's diff does not apply to a fresh copy |
+
+The run summary gives **resolved@k** (tasks solved in at least one of k
+attempts), pass rate over all attempts, mean agent time, total cost when the
+agent reports it, and a difficulty per task: `easy` (all attempts), `medium`
+(some) or `unsolved` (none). Unsolved tasks get a note in the review log.
+
+The `oracle` and `noop` agents are the harness's own sanity checks: on a valid
+task set the oracle must resolve 100% and `noop` 0%. Both are covered by tests.
+
+## 14. Harbor compatibility
+
+[Harbor](https://github.com/laude-institute/harbor) is a framework from the
+Terminal-Bench team (Apache-2.0) for running agents on tasks. Its task layout is
+the one this project's packages were modelled on. `factory tasks publish
+--format harbor` writes a fully self-contained Harbor task per approved package:
+
+| Harbor file | What task-factory writes |
+| --- | --- |
+| `instruction.md` | the requirements |
+| `task.toml` | Harbor schema: `[metadata]` (task id, title, category, language, repo URL, base commit, tags, author), `[verifier]`, `[agent]`, `[environment]` |
+| `environment/Dockerfile` + `repo.tar` | the same generated Dockerfile as our sandbox, with the pinned repo archive beside it |
+| `solution/solve.sh` | `git apply /solution/solution.diff` (Harbor's oracle agent runs it) |
+| `tests/test.sh` | restores protected tests, copies `/tests/files/` into the repo, runs the full suite, writes `1` or `0` to `/logs/verifier/reward.txt` |
+
+This was checked with the real Harbor CLI on an exported task: `harbor run -p
+DIR -a oracle` scored **1.000** and `-a nop` scored **0.000**. A Docker-based test
+in our suite runs the same `solve.sh` and `test.sh` with Harbor's mounts on
+every test run.
+
+## 15. Life of a task
 
 ```mermaid
 stateDiagram-v2
     [*] --> Idea : feature source (M7)
+    [*] --> Draft : a person writes one (tasks new)
     Idea --> Draft : task generator (M6)
-    Draft --> Validating : factory validate
+    Draft --> Validating : validate / tasks add
     Validating --> Rejected : first failing gate
-    Validating --> Valid : all seven gates pass
+    Validating --> Pending : all seven gates pass
     Rejected --> Draft : repair strategy, at most 3 times (M6)
     Rejected --> Logged : out of repairs
     Logged --> [*]
-    Valid --> Exported : package writer
-    Exported --> Reverified : factory validate on the package
-    Reverified --> [*]
+    Pending --> Approved : reviewer approves
+    Pending --> Deleted : reviewer deletes (reason)
+    Approved --> Deleted : reviewer deletes (reason)
+    Deleted --> Pending : restore
+    Approved --> Pending : edited and re-validated
+    Approved --> Published : tasks publish (native or Harbor)
+    Published --> Benchmarked : harness run
+    Benchmarked --> [*]
 ```
 
-Today, drafts are written by hand in a simple folder format (`task.json`,
+Today, drafts are written by people in a simple folder format (`task.json`,
 `requirements.md`, `after/` with the changed source files, `tests/`). The
 factory computes the reference diff from `after/` with git, so a hand-written
 task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LLM.
 
-## 13. Reproducibility guarantees
+## 16. Reproducibility guarantees
 
 | Source of variation | How it is pinned |
 | --- | --- |
@@ -589,9 +818,9 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 | Package content | deterministic files and checksums (timings live outside the checksum) |
 | LLM output (M6) | responses cached by prompt hash, so reruns replay identically |
 
-## 14. How it is tested
+## 17. How it is tested
 
-There are 106 tests. Unit tests use two small fixture repositories that are rich
+There are 127 tests. Unit tests use two small fixture repositories that are rich
 enough to show real failure modes:
 
 | Fixture | Contents |
@@ -599,6 +828,13 @@ enough to show real failure modes:
 | `toy_python_repo` (toyshop) | 6 modules with real dependencies, 28 tests incl. one slow and one switchable flaky test, README roadmap and TODO |
 | `toy_node_repo` (textkit) | 4 modules, 22 node:test tests incl. slow and flaky, README roadmap and TODO |
 | `tasks/python`, `tasks/node` | per repo: one good task, one broken task per reject code, and a "looks right but wrong" mutant |
+
+Beyond the gates, tests cover the review flow (approve, delete without a reason
+is refused, trash and restore, the interactive loop driven by scripted key
+presses, edits that are re-validated or refused), human-authored tasks, the
+harness (oracle 100%, noop 0%, a wrong agent graded `wrong_behaviour`, an agent
+that edits an existing test to hide a regression is still caught, hidden files
+absent from the agent sandbox), and the Harbor export run with Harbor's mounts.
 
 ```mermaid
 flowchart LR
@@ -616,7 +852,7 @@ flowchart LR
 Docker tests are marked `docker` and skip with a clear message when Docker is
 missing; `uv run pytest -m "not docker"` runs the rest in seconds.
 
-## 15. Extending task-factory
+## 18. Extending task-factory
 
 | You want to… | Change |
 | --- | --- |
@@ -626,8 +862,10 @@ missing; `uv run pytest -m "not docker"` runs the rest in seconds.
 | Tune strictness | `gates.mutations`, `gates.stability_repeats`, `gates.max_known_failure_ratio` in `factory.toml` |
 | Fix a detection mistake | override any `EnvConfig` field under `[env]` in `factory.toml` |
 | Plug in an LLM provider (M6) | implement the `LLMClient` interface in `llm/` |
+| Benchmark another coding agent | add `[harness.agents.NAME]` (install + run command) to `factory.toml`, or use `--agent command --cmd …` |
+| Run on Harbor's agents | `factory tasks publish --format harbor --out DIR`, then `harbor run -p DIR -a <agent>` |
 
-## 16. Roadmap
+## 19. Roadmap
 
 | Milestone | Component | What it adds |
 | --- | --- | --- |
@@ -637,12 +875,12 @@ missing; `uv run pytest -m "not docker"` runs the rest in seconds.
 | M9 | Report generator | funnel, rejection breakdown, per-task gate table, variation table, cost, limitations |
 | M10 | Orchestrator | `factory run` does every step in one command |
 | M11 | Real runs | at least 10 valid, varied tasks on the organizers' repo, plus a second repo with no code change |
-| M12 | Extras | optional solver benchmark, demo script, video, deck |
+| M12 | Extras | demo script, video, deck (the solver benchmark is already built as the coding harness) |
 
 The LLM provider is not chosen yet; the client stays provider-agnostic until
 hackathon credits are known.
 
-## 17. Glossary
+## 20. Glossary
 
 | Term | Meaning |
 | --- | --- |
@@ -656,3 +894,9 @@ hackathon credits are known.
 | **Gate** | One validation check (G0–G6) with its own fresh sandbox and log |
 | **Sandbox** | An isolated working copy of the pinned repo (a container) |
 | **Workdir** | The folder where every step keeps its JSON input and output |
+| **Task store** | The folder of valid packages plus `.trash/` and the review log |
+| **Review log** | Append-only record of every approve, delete, restore, edit and note |
+| **Harness** | The tool that runs AI coding agents on tasks and grades them |
+| **Oracle** | A harness agent that applies the reference patch; it must resolve every task |
+| **resolved@k** | Share of tasks an agent solved in at least one of k attempts |
+| **Harbor** | An open-source agent-evaluation framework whose task format we export |

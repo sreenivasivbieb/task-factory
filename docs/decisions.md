@@ -66,6 +66,34 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   `factory export` writes packages from the valid ones.
 - **D25 `verify_package` reloads the repo** from `task.toml`'s `repo` + `commit_sha`, so the
   source must still be reachable (URL or path). The repo itself is not copied into packages.
+- **D26 Human review is a first-class step** (user decision, 2026-11-21). Valid tasks enter a
+  task store as `pending`; only `approved` tasks are published. The review state lives in an
+  append-only `tasks/.review/log.jsonl`, not in the packages, so review never changes checksums.
+- **D27 Soft delete with a required reason.** Deleted packages move to `tasks/.trash/` and can be
+  restored. `publish` writes `review_summary.json` (deletions with reasons, human-authored tasks,
+  manual edits) because the organizers require manual changes to be disclosed. `factory export`
+  does not re-export a task a reviewer deleted.
+- **D28 Human-authored tasks get no shortcut**: `factory tasks add` runs every gate and marks the
+  task `generated_by.model = "human"` with the author. Added tasks are approved by default
+  (`--pending` to opt out), since their author already reviewed them.
+- **D29 Edits are re-validated and disclosed.** `tasks edit --apply --reason` replaces a package
+  only if the edited draft still passes every gate; it sets `manual_edit` and sends the task back
+  to `pending`.
+- **D30 Terminal review UI with `rich`** (MIT) instead of a web UI (the design doc kept web UIs out
+  of scope). Every interactive view also exists as a non-interactive `factory tasks show`.
+- **D31 Coding harness pulled forward from M12** and named `factory harness` (`factory bench` kept
+  as an alias). Agents are data (install + run command + secrets); presets for Claude Code,
+  Codex CLI, Aider and mini-swe-agent are marked experimental until run with real API keys.
+- **D32 Two sandboxes per attempt.** The agent runs with network (it must reach its model API) in
+  a container that has no hidden files; grading runs in a fresh offline container. Existing test
+  files the agent changed are restored before grading (`harness/protect.py`).
+- **D33 Secrets via environment only.** API keys are passed as `docker exec -e NAME` with the value
+  in the docker CLI's environment, so they never appear in a command line, `ps` output or logs.
+- **D34 Every image tags its starting commit `factory-base`** (prelude version 3), so diffs are
+  taken against the right commit even if an agent commits.
+- **D35 Harbor export.** `tasks publish --format harbor` writes Harbor's layout
+  (`/solution/solve.sh`, `/tests/test.sh` writing `/logs/verifier/reward.txt`, `environment/` with
+  the repo archive). Verified with the real Harbor CLI: oracle 1.000, nop 0.000.
 
 ## Limitations
 
@@ -76,3 +104,10 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   e.g. swapping the arguments of a symmetric function) survives and rejects a good task. The
   operator set is configurable (`gates.mutations`) and every survivor is named in the report.
 - L4 `gates.task_timeout_s` is not enforced yet; each test run has its own timeout.
+- L5 The Harbor verifier's reward is the full-suite exit code. Known baseline failures are
+  deselected for pytest only; for other frameworks a repo with known failures would score 0.
+- L6 Test protection restores tracked test files and `conftest.py`; an agent could still change
+  other test configuration (for example `pyproject.toml` pytest options). The grade records
+  which test files were restored.
+- L7 Agent presets other than `oracle`, `noop` and `command` have not been run with real API
+  keys in this environment; their command lines follow each tool's documentation.

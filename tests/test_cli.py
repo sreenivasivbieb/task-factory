@@ -11,4 +11,4 @@ def test_help_works():
 
 
 def test_unimplemented_command_exits_2(tmp_path):
-    assert main(["bench", "--solver", "x", "--workdir", str(tmp_path)]) == 2
+    assert main(["report", "--workdir", str(tmp_path)]) == 2

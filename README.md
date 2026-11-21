@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `106 tests` · `MIT`
+`Python 3.11+` · `Docker` · `127 tests` · `Harbor-compatible`
 
 </div>
 
@@ -30,24 +30,33 @@ flowchart LR
     L --> I[Inspect<br/>language, tests,<br/>Docker image]
     I --> F[Find feature<br/>ideas]
     F --> G[Write task:<br/>requirements +<br/>patch + tests]
+    YOU(["You: write<br/>your own task"]) --> V
     G --> V{{"Validation gates<br/>G0 to G6"}}
-    V -- valid --> P[("Task package")]
     V -- rejected --> X[rejections.jsonl<br/>with the reason]
-    X -. repair hints .-> G
+    X -.->|repair hints| G
+    V -- valid --> S[("Task store<br/>(pending)")]
+    S --> H{"Human review"}
+    H -- delete + reason --> T[".trash<br/>(restorable)"]
+    H -- approve --> P[("Published tasks<br/>native · Harbor")]
+    P --> B["Coding harness<br/>AI agents scored"]
 
     classDef done fill:#dcfce7,stroke:#16a34a,color:#14532d;
     classDef next fill:#f1f5f9,stroke:#94a3b8,color:#334155,stroke-dasharray: 4 3;
-    class L,I,V,P,X done;
+    classDef human fill:#fef9c3,stroke:#ca8a04,color:#713f12;
+    class L,I,V,X,S,T,P,B done;
     class F,G next;
+    class YOU,H human;
 ```
 
-<sub>Green = built and tested. Dashed = next milestones (feature source and LLM task generator).</sub>
+<sub>Green = built and tested. Yellow = a person decides. Dashed = next milestones (feature source and LLM task generator).</sub>
 
 1. **Load** copies the repo into a work folder and pins one exact commit (a 40-character SHA). The original is never touched.
 2. **Inspect** works out the language, how to install it and how to run its tests, builds a Docker image, and runs the existing test suite once.
-3. **Find ideas and write tasks** (next milestone): each task has a requirements file, a reference implementation as a diff, and hidden tests.
-4. **Validate** runs seven gates in fresh, network-less containers. A task passes only if every gate passes.
-5. **Package** writes each valid task to a folder that anyone can re-verify later from the files alone.
+3. **Write tasks**: each task has a requirements file, a reference implementation as a diff, and hidden tests. You can write your own today; the LLM generator is the next milestone.
+4. **Validate** runs seven gates in fresh, network-less containers. A task passes only if every gate passes, including the ones you write yourself.
+5. **Review**: a person looks at every valid task and approves or deletes it. Deletions need a reason and are disclosed.
+6. **Publish** only the approved tasks, in our format or in [Harbor](https://github.com/laude-institute/harbor)'s format.
+7. **Harness**: run AI coding agents (Claude Code, Codex, Aider, mini-swe-agent, or any command) on the tasks and score them with the hidden tests.
 
 ## What makes a task "valid"
 
@@ -196,6 +205,130 @@ flowchart LR
 runs all gates again, so the evidence can be checked by someone who never saw
 the original run.
 
+## Human in the loop
+
+Automatic checks prove a task is *valid*. Only a person can say it is *good*:
+clear wording, a realistic change, worth an agent's time. So every valid task
+lands in a **task store** as `pending`, and nothing is published until a
+reviewer approves it.
+
+```mermaid
+stateDiagram-v2
+    [*] --> pending : passes all gates
+    pending --> approved : factory review → a
+    pending --> deleted : d + reason (moved to .trash)
+    approved --> deleted : d + reason
+    deleted --> pending : factory tasks restore
+    approved --> pending : edited (re-validated, disclosed)
+    approved --> published : factory tasks publish
+```
+
+Review one task at a time in the terminal:
+
+```text
+$ factory review
+1 pending task(s) to review · reviewer: you
+──────────────────────────────── task 1/1 ────────────────────────────────
+╭──────────── toyshop-a471ba4-bulk-discount-on-cart-lines-007 ────────────╮
+│ status       pending                                                    │
+│ repo         toyshop @ a471ba47d091  (python)                           │
+│ kind / tags  feature  ·  validation rule, data transformation           │
+│ touches      toyshop/pricing.py                                         │
+│ tests        3 fail_to_pass · 28 pass_to_pass                           │
+│ mutants      2/2 caught (score 1.0)                                     │
+│ gates         G0   G1   G2   G3   G4   G6   G5                          │
+╰─────────────────────────────────────────────────────────────────────────╯
+╭─────────── instruction.md  (the only file the solver sees) ────────────╮
+│ Bulk discount on cart lines …                                           │
+╰─────────────────────────────────────────────────────────────────────────╯
+a=approve  d=delete  s=skip  i=instruction  p=patch  t=tests  g=gates  e=edit  q=quit
+choice>
+```
+
+| You want to… | Command |
+| --- | --- |
+| See every task and its status | `factory tasks list [--status pending]` |
+| Read one task (summary, instruction, colored diff, tests, gate logs) | `factory tasks show TASK_ID [--section patch]` |
+| Step through pending tasks and decide | `factory review` |
+| Approve | `factory tasks approve TASK_ID [--note "…"]` |
+| Delete (soft, reason required) | `factory tasks delete TASK_ID --reason "requirements are vague"` |
+| Undo a delete | `factory tasks restore TASK_ID` |
+| Fix a task by hand | `factory tasks edit TASK_ID` then `--apply --reason "…"` (re-validated, marked as a manual edit) |
+| Write your own task | `factory tasks new my-task`, fill it in, `factory tasks add workdir/drafts/my-task` |
+| Publish approved tasks | `factory tasks publish --out submission/ [--format harbor]` |
+| See what humans changed | `factory tasks summary` (counts, deletions with reasons, manual edits) |
+
+Every decision is appended to `tasks/.review/log.jsonl` with who, when and why.
+`publish` writes `review_summary.json` next to the tasks, so deletions and manual
+edits are disclosed, as the organizers require. A task you write yourself goes
+through all seven gates like any other and is marked `human (your name)`.
+
+## Coding harness
+
+The harness answers the question the tasks exist for: *how well does this
+agent do?* It runs an agent on each task and scores it with the hidden tests,
+without ever letting the agent see them.
+
+```mermaid
+sequenceDiagram
+    participant H as factory harness run
+    participant A as Agent sandbox<br/>(network on)
+    participant G as Grading sandbox<br/>(network off)
+    H->>A: fresh container at the starting commit + agent installed
+    H->>A: instruction.md only (no tests, no solution)
+    A->>A: agent edits the repo (Claude Code, Codex, Aider, …)
+    A-->>H: the agent's diff
+    H->>G: fresh container, apply the agent's diff
+    H->>G: put back any existing test the agent changed
+    H->>G: copy in the hidden tests, run them
+    G-->>H: resolved? · category · per-test results
+```
+
+```sh
+factory harness agents                                   # list agents
+factory harness run --agent oracle                       # sanity check: must resolve 100%
+factory harness run --agent noop                         # sanity check: must resolve 0%
+factory harness run --agent claude-code --k 3            # needs ANTHROPIC_API_KEY
+factory harness run --agent command --cmd 'my-agent --task-file {instruction_file}'
+```
+
+| Agent | What it runs | State |
+| --- | --- | --- |
+| `oracle` | applies the reference patch | verified |
+| `noop` | changes nothing | verified |
+| `command` | any shell command you give it | verified |
+| `claude-code` | `claude -p … --output-format json` ([repo](https://github.com/anthropics/claude-code)) | preset, not yet run with a real key |
+| `codex` | `codex exec …` ([repo](https://github.com/openai/codex)) | preset, not yet run with a real key |
+| `aider` | `aider --message-file …` ([repo](https://github.com/Aider-AI/aider)) | preset, not yet run with a real key |
+| `mini-swe-agent` | `mini -y --exit-immediately …` ([repo](https://github.com/SWE-agent/mini-swe-agent)) | preset, not yet run with a real key |
+| your own | `[harness.agents.NAME]` in `factory.toml` | |
+
+Each attempt is graded into one category: `resolved`, `wrong_behaviour`,
+`regression`, `build_error`, `no_change`, `timeout` or `patch_apply_fail`. The
+summary reports **resolved@k**, pass rate, time and cost (when the agent reports
+it), and a difficulty per task: *easy* (every attempt solved it), *medium*
+(some) or *unsolved*. An unsolved task gets a note in the review log, because it
+may be unsolvable and deserves a human look.
+
+**Cheating is blocked.** API keys reach the agent through the environment and
+never appear on a command line or in logs. An agent that edits or deletes
+existing tests to make them pass gets those files put back before grading, and
+the attempt records which files it touched.
+
+### Harbor compatibility
+
+[Harbor](https://github.com/laude-institute/harbor) (Apache-2.0, from the
+Terminal-Bench team) is a popular framework for running agents on tasks.
+`factory tasks publish --format harbor` writes each task in Harbor's layout
+(`environment/` with the pinned repo, `solution/solve.sh`, `tests/test.sh`
+writing `/logs/verifier/reward.txt`), so the same tasks run on Harbor's built-in
+agents too. Checked with the real Harbor CLI:
+
+```text
+$ harbor run -p submission/ -a oracle        $ harbor run -p submission/ -a nop
+  Trials 1 · Exceptions 0 · Mean 1.000         Trials 1 · Exceptions 0 · Mean 0.000
+```
+
 ## Quickstart
 
 You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works too).
@@ -203,7 +336,7 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works
 ```sh
 git clone https://github.com/sreenivasivbieb/task-factory && cd task-factory
 uv sync
-uv run pytest                      # 106 tests; Docker tests skip with a message if Docker is missing
+uv run pytest                      # 127 tests; Docker tests skip with a message if Docker is missing
 ```
 
 Run the whole flow on the bundled toy repo:
@@ -215,8 +348,11 @@ git -C /tmp/toyshop init -q && git -C /tmp/toyshop add -A && git -C /tmp/toyshop
 uv run factory load --repo /tmp/toyshop            # copy and pin the repo
 uv run factory inspect                             # detect env, build image, run baseline (28 passed)
 uv run factory validate --tasks tests/fixtures/tasks/python   # 1/7 valid, 6 rejected with exact codes
-uv run factory export --out tasks/                 # write the valid task as a package
-uv run factory validate --tasks tasks/             # re-verify the package from disk alone
+uv run factory export                              # valid tasks go to workdir/tasks as pending
+uv run factory review                              # approve or delete them, one by one
+uv run factory tasks publish --out submission/     # only approved tasks
+uv run factory validate --tasks submission/        # re-verify the packages from disk alone
+uv run factory harness run --agent oracle          # harness sanity check: 100% resolved
 ```
 
 ## Commands
@@ -226,8 +362,11 @@ uv run factory validate --tasks tasks/             # re-verify the package from 
 | `factory load --repo SRC [--commit SHA]` | Copy and pin the repo; writes `repo_spec.json` | ✅ |
 | `factory inspect` | Detect environment, build image, run baseline; writes `env_config.json` | ✅ |
 | `factory validate --tasks DIR` | Run the gates on task drafts or re-verify packages | ✅ |
-| `factory export --out DIR` | Write every valid task as a package | ✅ |
-| `factory ideas` · `generate` · `report` · `bench` · `run` | Feature source, LLM generation, evidence report, solver benchmark, one-shot pipeline | 🔜 M6–M12 |
+| `factory export` | Write every valid task into the task store as `pending` | ✅ |
+| `factory tasks list · show · approve · delete · restore · edit · new · add · publish · summary` | Human review and authoring | ✅ |
+| `factory review` | Interactive review, one task at a time | ✅ |
+| `factory harness agents · run` (alias `factory bench`) | Run AI coding agents on tasks and score them | ✅ |
+| `factory ideas` · `generate` · `report` · `run` | Feature source, LLM generation, evidence report, one-shot pipeline | 🔜 M6–M10 |
 
 Flags on every command: `--workdir`, `--config`, `--seed`, `--force`, `--dry-run`,
 `--verbose`, `--backend docker|local`. Each step saves JSON under `workdir/` and
@@ -254,17 +393,22 @@ Adding a language means adding one inspector rule and, if needed, one report par
 flowchart LR
     M0[M0 Skeleton] --> M1[M1 Sandbox] --> M2[M2 Loader +<br/>inspector] --> M4[M4 Validation<br/>gates]
     M1 --> M3[M3 Test runner] --> M4
-    M4 --> M5[M5 Packages]
+    M4 --> M5[M5 Packages] --> HR[Human review +<br/>own tasks]
+    M5 --> HN[Coding harness +<br/>Harbor export]
     M4 --> M6[M6 LLM task<br/>generator]
     M2 --> M7[M7 Feature<br/>source]
     M6 --> M8[M8 Variation] --> M9[M9 Report]
-    M5 & M7 & M9 --> M10[M10 Wiring] --> M11[M11 Real runs] --> M12[M12 Demo]
+    HR & M7 & M9 --> M10[M10 Wiring] --> M11[M11 Real runs] --> M12[M12 Demo]
 
     classDef done fill:#dcfce7,stroke:#16a34a,color:#14532d;
     classDef next fill:#f1f5f9,stroke:#94a3b8,color:#334155,stroke-dasharray: 4 3;
-    class M0,M1,M2,M3,M4,M5 done;
+    class M0,M1,M2,M3,M4,M5,HR,HN done;
     class M6,M7,M8,M9,M10,M11,M12 next;
 ```
+
+The coding harness was planned as an optional extra in M12; it was pulled
+forward because it shows whether the tasks are fair (the oracle must score
+100%, an empty agent 0%) and lets people review tasks with real agent results.
 
 ## Learn more
 
@@ -276,7 +420,11 @@ flowchart LR
 | Dependency | Used for | License |
 | --- | --- | --- |
 | pydantic | data models | MIT |
+| rich | terminal review screens and tables | MIT |
 | pytest (dev only) | tests | MIT |
 | hatchling (build only) | packaging | MIT |
 
-Everything else (CLI, TOML writer, report parsers, mutation engine) uses only the Python standard library.
+Everything else (CLI, TOML writer, report parsers, mutation engine, harness) uses only the Python standard library.
+Agents and Harbor are optional external tools: they are installed into sandboxes or run by you, never
+imported. Their licenses: Harbor Apache-2.0, Aider Apache-2.0, mini-swe-agent MIT, Codex CLI Apache-2.0,
+Claude Code under Anthropic's terms.

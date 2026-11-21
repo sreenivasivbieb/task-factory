@@ -30,5 +30,22 @@ class Workdir:
         return self.root / "runs"
 
     @property
+    def tasks(self) -> Path:
+        """Default task store (packages + review trail)."""
+        return self.root / "tasks"
+
+    @property
+    def drafts(self) -> Path:
+        return self.root / "drafts"
+
+    @property
+    def edits(self) -> Path:
+        return self.root / "edits"
+
+    @property
+    def harness(self) -> Path:
+        return self.root / "harness"
+
+    @property
     def rejections(self) -> Path:
         return self.root / "rejections.jsonl"
