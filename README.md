@@ -31,6 +31,7 @@ flowchart LR
     I --> F[Find feature<br/>ideas]
     F --> G[Write task:<br/>requirements +<br/>patch + tests]
     YOU(["You: write<br/>your own task"]) --> V
+    PROMPT(["Your prompt +<br/>selected model"]) --> G
     G --> V{{"Validation gates<br/>G0 to G6"}}
     V -- rejected --> X[rejections.jsonl<br/>with the reason]
     X -.->|repair hints| G
@@ -43,20 +44,57 @@ flowchart LR
     classDef done fill:#dcfce7,stroke:#16a34a,color:#14532d;
     classDef next fill:#f1f5f9,stroke:#94a3b8,color:#334155,stroke-dasharray: 4 3;
     classDef human fill:#fef9c3,stroke:#ca8a04,color:#713f12;
-    class L,I,V,X,S,T,P,B done;
-    class F,G next;
-    class YOU,H human;
+    class L,I,G,V,X,S,T,P,B done;
+    class F next;
+    class YOU,PROMPT,H human;
 ```
 
-<sub>Green = built and tested. Yellow = a person decides. Dashed = next milestones (feature source and LLM task generator).</sub>
+<sub>Green = implemented. Yellow = human input or review. Dashed = planned automatic feature discovery.</sub>
 
 1. **Load** copies the repo into a work folder and pins one exact commit (a 40-character SHA). The original is never touched.
 2. **Inspect** works out the language, how to install it and how to run its tests, builds a Docker image, and runs the existing test suite once.
-3. **Write tasks**: each task has a requirements file, a reference implementation as a diff, and hidden tests. You can write your own today; the LLM generator is the next milestone.
+3. **Write tasks**: each task has a requirements file, a reference implementation as a diff, and hidden tests. You can write a task yourself or generate a draft from a user prompt with the selected model.
 4. **Validate** runs seven gates in fresh, network-less containers. A task passes only if every gate passes, including the ones you write yourself.
 5. **Review**: a person looks at every valid task and approves or deletes it. Deletions need a reason and are disclosed.
 6. **Publish** only the approved tasks, in our format or in [Harbor](https://github.com/laude-institute/harbor)'s format.
-7. **Harness**: assign tasks to a test model (OpenCode with NVIDIA, TokenRouter, OpenCode Zen or AWS Bedrock Qwen; Claude Code; Codex; Aider; mini-swe-agent; or any command). It solves them in a sandbox, the hidden tests grade it, and every passing solution becomes a new git branch.
+7. **Harness**: assign tasks to a test model (the Task Factory engine with NVIDIA, TokenRouter, Zen or AWS Bedrock Qwen; Claude Code; Codex; Aider; mini-swe-agent; or any command). It solves them in a sandbox, the hidden tests grade it, and every passing solution becomes a new git branch.
+
+### Task Factory terminal
+
+Task Factory ships its own terminal: a full coding-agent TUI with a command
+palette, sessions, model management, agents, repository tools, permissions and
+plugins, plus the Task Factory commands. It is a separate program with its own
+settings, logins and sessions, so it never starts or changes another coding
+tool installed on the same machine.
+
+Build the engine, then install the launcher:
+
+```bash
+python3 scripts/build_terminal.py "../Task Factory Engine"   # fetches the pinned source on first run
+uv tool install --editable .
+```
+
+| What | Where |
+|---|---|
+| Engine | `~/.local/share/task-factory/bin/task-factory-engine` |
+| Settings, logins, sessions | `~/.config/task-factory`, `~/.local/share/task-factory` |
+| Project config | `task-factory.json`, `.task-factory/` |
+| Environment settings | `TASK_FACTORY_*`, e.g. `TASK_FACTORY_CONFIG_CONTENT` |
+| `uninstall` | removes only the Task Factory cache |
+
+Log in to model providers inside the terminal with `/connect`. The engine's
+third-party license is installed next to it as `THIRD-PARTY-LICENSE`.
+
+Run `task-factory` inside any project, or use `task-factory chat /path/to/project`.
+`task-factory terminal --help` shows the engine's own commands. Run the build
+script again to rebuild the engine.
+
+Select a model in the terminal and type `/generate-task Add a bulk discount`.
+Task Factory uses the selected model to generate the draft and tests in two
+separate requests. The Docker validation gates must pass before the task is
+saved for human review. The command reports where to find the draft and results.
+
+`factory generate` also supports direct use with a compatible model provider.
 
 ## What makes a task "valid"
 
@@ -285,7 +323,7 @@ branch.
 
 ```mermaid
 flowchart LR
-    A["factory tasks assign TASK<br/>--model nvidia/… · tokenrouter/… ·<br/>opencode/… · amazon-bedrock/qwen…"] --> W["factory harness work"]
+    A["factory tasks assign TASK<br/>--model nvidia/… · tokenrouter/… ·<br/>Zen · amazon-bedrock/qwen…"] --> W["factory harness work"]
     W --> S1["Agent sandbox<br/>base commit + all deps installed<br/>+ agent CLI · network on"]
     S1 -->|"instruction.md only"| M(["LLM implements<br/>the task"])
     M -->|"its diff"| S2["Grading sandbox<br/>fresh · network off<br/>undo test/config changes · add hidden tests"]
@@ -302,57 +340,45 @@ flowchart LR
 ### Assign a task to a test model and run it
 
 ```sh
-factory tasks assign TASK_ID --agent opencode --model opencode/deepseek-v4.1-flash-free
+factory tasks assign TASK_ID --agent task-factory --model nvidia/qwen/qwen3-coder-480b-a35b-instruct
 factory tasks assignments                    # what is waiting
-factory harness work --use-host-auth         # run every open assignment
+factory harness work                         # run every open assignment
 factory tasks assignments --all              # results, with the branch of each passing solution
 git -C workdir/solutions/toyshop log --oneline --all
 ```
 
-A real run on the toy task, with a free model through OpenCode:
+A passing solution becomes a commit on a new branch,
+`ai/<agent>-<model>/<task_id>`, and its message carries the evidence:
 
 ```text
-$ factory harness work --use-host-auth
-opencode · opencode/deepseek-v4.1-flash-free: 1 task(s), k=1
-  resolved         toyshop-a471ba4-bulk-discount-on-cart-lines-007 (attempt 1, agent 27.75s)
-      new branch ai/opencode-deepseek-v4-1-flash-free/toyshop-a471ba4-bulk-discount-on-cart-lines-007 @ 5c7b3ce3f7f4
-  resolved@1: 100%
-```
-
-The new commit carries the evidence in its message:
-
-```text
-Bulk discount on cart lines: solved by opencode (opencode/deepseek-v4.1-flash-free)
-
-Task: toyshop-a471ba4-bulk-discount-on-cart-lines-007
-Base commit: a471ba47d0913375f9bcbb3b7557bca97f39c881
-Agent: opencode · Model: opencode/deepseek-v4.1-flash-free · Attempt 1
+Task: <task_id>
+Base commit: <40-character SHA>
+Agent: task-factory · Model: <model> · Attempt 1
 Hidden tests: 3/3 fail_to_pass passed, 28/28 pass_to_pass passed
 ```
 
-In that run the model also edited an existing test file (it added its own
-tests). The harness put that file back before grading, recorded it under
-`tests_tampered`, and committed only the source change to the branch.
+If the model edits an existing test file, the harness puts that file back
+before grading, records it under `tests_tampered`, and commits only the source
+change to the branch.
 
 ### Which models
 
-[OpenCode](https://github.com/sst/opencode) is the default agent because it talks
-to many providers with one CLI. Pass the model as `provider/model`:
+The default agent, `task-factory`, is the Task Factory engine itself, copied
+into the sandbox image (no download inside the container). It talks to many
+providers. Pass the model as `provider/model`:
 
 | Provider | Example `--model` | Credentials |
 | --- | --- | --- |
-| OpenCode Zen (has free models) | `opencode/deepseek-v4.1-flash-free`, `opencode/qwen3.6-plus` | `opencode auth login`, or `OPENCODE_API_KEY` |
-| NVIDIA (build.nvidia.com, free credits) | `nvidia/<model id from opencode models nvidia>` | `opencode auth login`, or `NVIDIA_API_KEY` |
-| TokenRouter | `tokenrouter/<model id>` | `opencode auth login`, or `TOKENROUTER_API_KEY` |
+| Zen (has free models, rate limited; IDs keep the provider's own prefix) | `opencode/deepseek-v4.1-flash-free`, `opencode/qwen3.6-plus` | none for free models, or `TASK_FACTORY_API_KEY` |
+| NVIDIA (build.nvidia.com, free credits) | `nvidia/<model id from task-factory terminal models nvidia>` | `NVIDIA_API_KEY` |
+| TokenRouter | `tokenrouter/<model id>` | `TOKENROUTER_API_KEY` |
 | AWS Bedrock (Qwen) | `amazon-bedrock/qwen.qwen3-coder-480b-a35b-v1:0` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` + `AWS_REGION`, or `AWS_BEARER_TOKEN_BEDROCK` |
 
-`--use-host-auth` copies **only the login for the model's provider** from your
-OpenCode `auth.json` into the sandbox (through stdin, never a command line);
-the container is removed after the attempt. Without it, the harness forwards
-the provider's environment variables instead. Run `opencode models` to see the
-exact model IDs your accounts can use: in our test, two IDs listed by the
-catalogue were rejected by the provider with "model not found", which the
-harness reports as `agent_error`.
+The harness forwards only the provider's environment variables into the
+sandbox, and the container is removed after the attempt. Run
+`task-factory terminal models` to see the exact model IDs your accounts can
+use. A model the provider rejects ("model not found", a used-up free quota) is
+reported as `agent_error` and the assignment stays open.
 
 ### Other commands and agents
 
@@ -360,13 +386,13 @@ harness reports as `agent_error`.
 factory harness agents                                   # list agents
 factory harness run --agent oracle                       # sanity check: must resolve 100%
 factory harness run --agent noop                         # sanity check: must resolve 0%
-factory harness run --agent opencode --model … --k 3     # without assignments: all tasks in the store
+factory harness run --agent task-factory --model … --k 3 # without assignments: all tasks in the store
 factory harness run --agent command --cmd 'my-agent --task-file {instruction_file}'
 ```
 
 | Agent | What it runs | State |
 | --- | --- | --- |
-| `opencode` | `opencode run --auto --standalone -m <model>` ([repo](https://github.com/sst/opencode), `@opencode/cli` 2.3.2) | **verified with a real model** |
+| `task-factory` | `task-factory-engine run --auto --standalone -m <model>` (the bundled engine) | runs in the sandbox and reaches the provider; a full solve is not yet re-run after the rename |
 | `oracle` | applies the reference patch | verified |
 | `noop` | changes nothing | verified |
 | `command` | any shell command you give it | verified |

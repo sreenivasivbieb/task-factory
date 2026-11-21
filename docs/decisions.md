@@ -101,9 +101,10 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   `ai/<agent>-<model>/<task_id>` in `workdir/solutions/<repo>` (a clone, never the supplied repo).
   The commit holds exactly the graded diff (restored test files removed; hidden tests never
   included). Only real agents get branches, not `oracle`/`noop`.
-- **D38 OpenCode is the default test agent** (user wanted AWS Qwen, OpenCode, TokenRouter or
-  NVIDIA free models): one CLI covers all four through `provider/model`. Pinned to
-  `@opencode/cli@2.3.2`; the `opencode-ai` npm package is v1 and lacks `--standalone`.
+- **D38 The Task Factory engine is the default test agent** (user wanted AWS Qwen, Zen,
+  TokenRouter or NVIDIA free models): one engine covers all four through `provider/model`.
+  It is our own bundled binary, copied into the agent image, so the harness installs no
+  third-party coding CLI and the benchmark runs the same engine as the terminal.
 - **D39 `--use-host-auth` is opt-in** and copies only the model provider's entry of the agent's
   login file into the sandbox, through stdin, mode 600.
 - **D40 `agent_error` category**: an agent that exits non-zero without changing anything is not
@@ -132,7 +133,7 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   uses the same base. Images without a registry digest keep their tag, with a warning.
 - **D47 Agent errors are not results**: when every attempt is `agent_error`/`leak` the worker keeps
   the assignment open and notes it (no "unsolved" note); difficulty is `error`. A run stops after
-  two agent errors in a row (an exhausted quota fails every task alike). Seen live: OpenCode's free
+  two agent errors in a row (an exhausted quota fails every task alike). Seen live: the Zen free
   quota returned HTTP 429 and earlier runs wrongly closed the assignments as unsolved.
 - **D48 The workflow never discards a human decision**: `export` skips packages already in the store
   (`--force` overwrites); `tasks publish` removes task folders that are no longer approved; `tasks
@@ -163,7 +164,7 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   test file) from a harmful one; both are restored before grading and listed in
   `tests_tampered`.
 - L9 AWS Bedrock Qwen is configured but not run here (no AWS credentials on this machine); the
-  OpenCode path itself was verified with an OpenCode Zen free model.
+  engine path itself was verified with a Zen free model.
 - L10 Every hidden test must fail without the change (G3), so a task cannot ship separate
   "guard" tests that already pass (e.g. "the old behaviour still works"); such assertions go
   inside a failing test. Existing tests already act as guards (pass_to_pass).
