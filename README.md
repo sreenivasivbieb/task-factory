@@ -46,7 +46,7 @@ Common flags: `--workdir`, `--config`, `--seed`, `--force`, `--dry-run`,
 Try it on the bundled fixture:
 
 ```sh
-git -C tests/fixtures/toy_python_repo init -q 2>/dev/null; cp -r tests/fixtures/toy_python_repo /tmp/toyshop
+cp -r tests/fixtures/toy_python_repo /tmp/toyshop
 git -C /tmp/toyshop init -q && git -C /tmp/toyshop add -A && git -C /tmp/toyshop commit -qm init
 uv run factory load --repo /tmp/toyshop
 uv run factory inspect
