@@ -24,7 +24,18 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
 - **D8 OOM detection is a heuristic:** exit code 137 without a timeout sets `oom_killed`.
 - **D9 LocalSandbox sets `TMPDIR`** to a per-sandbox folder, so `/tmp` state does not leak
   between local sandboxes.
+- **D10 `run_repeated(sb, env, n, select)` repeats inside one sandbox** (the doc's signature
+  took a sandbox factory). This catches random flakiness and tests that depend on state left by
+  an earlier run, and keeps fixtures deterministic. G5 starts a fresh sandbox for each repeated
+  gate, so the "fresh sandbox per gate" rule still holds.
+- **D11 Own node:test reporter.** Node's built-in junit reporter has no `file` attribute before
+  v23, so test IDs were ambiguous. The runner writes `.factory/node-junit.mjs` into the sandbox
+  and node:test projects use it (`NODE_TEST_COMMAND`). Works on Node 20+.
+- **D12 Selection.** pytest, node:test and Jest select files/IDs on the command line. Go selects
+  package folders. Maven, Gradle and Cargo run the full suite and results are filtered.
 
 ## Limitations
 
 - L1 LocalSandbox has no isolation and allows network; it logs a warning on every use.
+- L2 Go, Maven, Gradle and Cargo support is parser-level only so far (unit-tested on sample
+  reports); only Python and Node run end to end on fixtures.

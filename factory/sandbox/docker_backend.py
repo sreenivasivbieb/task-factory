@@ -89,6 +89,7 @@ class DockerSandbox(Sandbox):
         self.bin = factory.bin
         self.cid = container_id
         self.user = user
+        self.repo_root = "/repo"
         self.limit = factory.cfg.output_limit_bytes
         self._closed = False
 

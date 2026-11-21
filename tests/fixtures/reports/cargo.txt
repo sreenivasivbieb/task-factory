@@ -1,0 +1,5 @@
+running 3 tests
+test calc::tests::adds ... ok
+test calc::tests::divides ... FAILED
+test calc::tests::later ... ignored
+test result: FAILED. 1 passed; 1 failed; 1 ignored

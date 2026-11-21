@@ -1,0 +1,7 @@
+{"numTotalTests":3,"testResults":[
+ {"name":"/repo/src/sum.test.js","status":"failed","assertionResults":[
+   {"fullName":"sum adds","status":"passed","duration":3},
+   {"fullName":"sum handles NaN","status":"failed","duration":5},
+   {"fullName":"sum later","status":"pending","duration":null}]},
+ {"name":"/repo/src/broken.test.js","status":"failed","assertionResults":[]}
+]}

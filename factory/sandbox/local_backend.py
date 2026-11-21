@@ -82,6 +82,7 @@ class LocalSandbox(Sandbox):
     def __init__(self, root: Path, repo: Path, limit: int) -> None:
         self.root = root
         self.repo = repo
+        self.repo_root = str(repo)
         self.limit = limit
         self.tmp = repo / SCRATCH_DIR / "tmp"
         self.tmp.mkdir(parents=True, exist_ok=True)

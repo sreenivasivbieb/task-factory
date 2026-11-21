@@ -32,6 +32,7 @@ def pytest_collection_modifyitems(config, items):
 from factory.config import SandboxConfig  # noqa: E402
 from factory.models import EnvConfig, RepoSpec  # noqa: E402
 from helpers import git  # noqa: E402
+from factory.runner.test_runner import NODE_TEST_COMMAND  # noqa: E402
 
 PY_TEST_CMD = ("python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 "
                "--junitxml={report} {select}")
@@ -70,7 +71,7 @@ def py_env_local():
 @pytest.fixture(scope="session")
 def node_env_docker():
     return EnvConfig(base_image="node:22-slim", setup_commands=["npm ci --no-audit --no-fund"],
-                     test_command="node --test --test-reporter=junit --test-reporter-destination={report} {select}",
+                     test_command=NODE_TEST_COMMAND,
                      framework="node", report_format="junit", test_timeout_s=120)
 
 

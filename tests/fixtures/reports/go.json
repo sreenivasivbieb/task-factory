@@ -1,0 +1,7 @@
+{"Action":"run","Package":"example.com/m/calc","Test":"TestAdd"}
+{"Action":"output","Package":"example.com/m/calc","Test":"TestAdd","Output":"=== RUN   TestAdd\n"}
+{"Action":"pass","Package":"example.com/m/calc","Test":"TestAdd","Elapsed":0.01}
+{"Action":"run","Package":"example.com/m/calc","Test":"TestDiv"}
+{"Action":"fail","Package":"example.com/m/calc","Test":"TestDiv","Elapsed":0.02}
+{"Action":"skip","Package":"example.com/m/calc","Test":"TestLater","Elapsed":0}
+{"Action":"fail","Package":"example.com/m/calc","Elapsed":0.03}
