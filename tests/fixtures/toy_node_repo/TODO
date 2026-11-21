@@ -1,0 +1,2 @@
+- slugify: keep a custom separator (for example "_").
+- stats: optional list of stop words to skip in topWords.

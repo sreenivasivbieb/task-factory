@@ -1,0 +1,7 @@
+workdir/
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+dist/
+*.egg-info/

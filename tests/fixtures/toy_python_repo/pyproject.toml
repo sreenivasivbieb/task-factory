@@ -1,0 +1,18 @@
+[project]
+name = "toyshop"
+version = "0.3.0"
+description = "A tiny shop library used as a test fixture for the task factory."
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["toyshop"]
+
+[tool.pytest.ini_options]
+markers = ["slow: slow tests"]

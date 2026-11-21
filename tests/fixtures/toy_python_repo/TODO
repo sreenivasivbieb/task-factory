@@ -1,0 +1,3 @@
+- Receipts: show the number of items on the TOTAL line.
+- Cart: add `clear()` to empty the cart.
+- Coupons: reject coupon codes in lower case with a clear error, or normalise them.
