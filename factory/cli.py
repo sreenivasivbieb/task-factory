@@ -61,8 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=30)
     _common(p)
 
-    p = sub.add_parser("generate", help="(planned, M6) generate tasks with an LLM and validate them")
-    p.add_argument("--count", type=int, default=10)
+    p = sub.add_parser("generate", help="draft and validate a task using a configured model")
+    p.add_argument("--prompt", required=True, help="describe the coding task")
+    p.add_argument("--model", help="model ID (defaults to FACTORY_MODEL)")
+    p.add_argument("--file", action="append", default=[], help="repo-relative context file (repeatable)")
     _common(p)
 
     p = sub.add_parser("validate", help="run the gates on task drafts, or re-verify packages")

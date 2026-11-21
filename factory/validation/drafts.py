@@ -76,7 +76,7 @@ def load_draft_dir(path: Path, spec: RepoSpec, n: int = 1) -> TaskDraft:
         solution_patch=patch,
         test_files=_files_under(path / "tests"),
         touched_files=sorted(after) or _touched_from_patch(patch),
-        generated_by=GeneratedBy(model="human"),
+        generated_by=GeneratedBy(model=meta.get("model", "human")),
         manual_edit=meta.get("manual_edit", False),
         manual_edit_reason=meta.get("manual_edit_reason"),
     )
