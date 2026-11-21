@@ -33,6 +33,14 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   and node:test projects use it (`NODE_TEST_COMMAND`). Works on Node 20+.
 - **D12 Selection.** pytest, node:test and Jest select files/IDs on the command line. Go selects
   package folders. Maven, Gradle and Cargo run the full suite and results are filtered.
+- **D13 Loader dirty check** refuses changes to tracked files; untracked files only log a
+  warning, because the loader clones committed content and never copies them anyway.
+- **D14 Synthetic history is deterministic**: fixed author and date, so the same zip gives the
+  same commit SHA on every run (needed for repeatable task IDs).
+- **D15 Inspector defaults**: Python -> `python:3.11-slim` (raised by `requires-python`), pytest
+  for every Python repo (it also runs unittest suites); Node -> `node:22-slim`, Jest, Vitest or
+  node:test; anything else -> `needs_manual_config` with reasons. LLM help for setup commands is
+  not built (section 8 marks it optional).
 
 ## Limitations
 

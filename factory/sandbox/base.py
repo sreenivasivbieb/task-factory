@@ -19,7 +19,7 @@ from ..models import EnvConfig, ExecResult, ImageRef, RepoSpec, slugify
 log = logging.getLogger("factory.sandbox")
 
 # Bump when the generated Dockerfile changes, so cached images are rebuilt.
-PRELUDE_VERSION = "1"
+PRELUDE_VERSION = "2"
 
 # Fixed environment inside every sandbox.
 FIXED_ENV = {"TZ": "UTC", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8", "PYTHONHASHSEED": "0",
@@ -58,7 +58,8 @@ BASE_COMMIT_SH = (
     "git init -q && git add -A && "
     "git -c user.name=factory -c user.email=factory@localhost -c commit.gpgsign=false "
     "commit -q --allow-empty -m base && "
-    f"mkdir -p {SCRATCH_DIR} && printf '{SCRATCH_DIR}/\\n' >> .git/info/exclude"
+    f"mkdir -p {SCRATCH_DIR} && printf '%s\\n' {SCRATCH_DIR}/ '*.egg-info/' node_modules/ __pycache__/ "
+    "'.pytest_cache/' >> .git/info/exclude"
 )
 
 
