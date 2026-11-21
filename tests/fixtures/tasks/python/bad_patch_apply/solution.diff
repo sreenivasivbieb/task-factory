@@ -1,0 +1,12 @@
+diff --git a/toyshop/pricing.py b/toyshop/pricing.py
+--- a/toyshop/pricing.py
++++ b/toyshop/pricing.py
+@@ -9,4 +9,7 @@
+ def line_total(price_cents: int, qty: int) -> int:
+-    """Total for one line of the cart."""
+-    return price_cents * qty
++    """Total for one cart line."""
++    amount = price_cents * qty
++    if qty >= 10:
++        amount -= (amount * 10 + 50) // 100
++    return amount

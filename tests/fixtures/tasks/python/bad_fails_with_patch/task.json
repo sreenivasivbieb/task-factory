@@ -1,0 +1,1 @@
+{"title": "Bulk discount (wrong threshold)", "kind": "feature", "tags": ["validation rule", "data transformation"], "expect": "FEATURE_TESTS_FAIL_WITH_PATCH"}

@@ -44,7 +44,11 @@ class LocalSandboxFactory(SandboxFactory):
             with tarfile.open(tar_path) as tf:
                 tf.extractall(tmp, filter="data")
             tar_path.unlink()
-            for cmd in [BASE_COMMIT_SH, *env.setup_commands]:
+            setup = env.setup_commands if self.cfg.local_run_setup else []
+            if env.setup_commands and not setup:
+                log.warning("local backend skips setup commands (set sandbox.local_run_setup = true to run "
+                            "them on the host): %s", env.setup_commands)
+            for cmd in [BASE_COMMIT_SH, *setup]:
                 r = subprocess.run(["sh", "-c", cmd], cwd=tmp, capture_output=True, text=True,
                                    env=_host_env(), timeout=self.cfg.build_timeout_s)
                 if r.returncode != 0:

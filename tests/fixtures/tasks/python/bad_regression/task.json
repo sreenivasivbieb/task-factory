@@ -1,0 +1,1 @@
+{"title": "Bulk discount (breaks money format)", "kind": "feature", "tags": ["validation rule", "data transformation"], "expect": "REGRESSION"}

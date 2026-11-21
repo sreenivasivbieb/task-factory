@@ -1,0 +1,1 @@
+{"title": "Reading time (tests check old behaviour)", "kind": "feature", "tags": ["data transformation"], "expect": "FEATURE_TESTS_PASS_WITHOUT_PATCH"}

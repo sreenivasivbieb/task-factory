@@ -69,3 +69,48 @@ def load_state(cfg: FactoryConfig) -> tuple[RepoSpec, EnvConfig]:
 
 
 __all__ = ["cmd_load", "cmd_inspect", "load_state", "InspectResult"]
+
+
+def _validation_targets(path):
+    """A draft folder, a package folder, or a folder of either."""
+    from pathlib import Path
+
+    path = Path(path)
+    if (path / "task.json").exists() or (path / "task.toml").exists():
+        return [path]
+    if not path.is_dir():
+        raise ConfigError(f"{path} is not a folder")
+    found = sorted(p for p in path.iterdir() if (p / "task.json").exists() or (p / "task.toml").exists())
+    if not found:
+        raise ConfigError(f"no task drafts (task.json) or packages (task.toml) under {path}")
+    return found
+
+
+def cmd_validate(args: argparse.Namespace, cfg: FactoryConfig) -> int:
+    from .sandbox import make_factory
+    from .validation.drafts import load_draft_dir
+    from .validation.gates import Validator, append_rejection
+
+    wd = Workdir(cfg.workdir)
+    targets = _validation_targets(args.tasks)
+    factory = make_factory(cfg)
+    validator = None
+    valid = 0
+    for i, target in enumerate(targets, start=1):
+        if (target / "task.toml").exists():
+            from .packaging.verify import verify_package
+
+            report = verify_package(target, factory, cfg, log_dir=wd.runs)
+        else:
+            spec, env = load_state(cfg)
+            if validator is None:
+                validator = Validator(factory, spec, env, cfg.gates, log_dir=wd.runs, cache_dir=wd.cache)
+            report = validator.validate(load_draft_dir(target, spec, n=i))
+        if report.verdict == "valid":
+            valid += 1
+        else:
+            append_rejection(wd.rejections, report)
+        code = report.reject_code.value if report.reject_code else ""
+        print(f"{report.verdict:9} {code:34} {report.task_id}")
+    print(f"{valid}/{len(targets)} valid")
+    return 0 if valid else 4

@@ -1,0 +1,1 @@
+{"title": "Bulk discount (stale patch)", "kind": "feature", "tags": ["validation rule", "data transformation"], "expect": "PATCH_APPLY_FAIL"}

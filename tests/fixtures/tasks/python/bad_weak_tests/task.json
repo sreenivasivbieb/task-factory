@@ -1,0 +1,1 @@
+{"title": "Bulk discount (weak tests)", "kind": "feature", "tags": ["validation rule", "data transformation"], "expect": "NEG_CONTROL_PASSED"}

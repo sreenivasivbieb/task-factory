@@ -41,9 +41,31 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   for every Python repo (it also runs unittest suites); Node -> `node:22-slim`, Jest, Vitest or
   node:test; anything else -> `needs_manual_config` with reasons. LLM help for setup commands is
   not built (section 8 marks it optional).
+- **D16 Gate order** is G0, G1, G2, G3, G4, G6, G5: G5 (stability) is the most expensive and
+  the doc says to run it only on tasks that passed every other gate.
+- **D17 Feature tests = new test IDs.** G2 runs the task's test files; the feature tests are the
+  test IDs not present in the baseline (so a task may extend an existing test file).
+  `fail_to_pass` = those IDs, `pass_to_pass` = every test that passed at baseline.
+- **D18 A feature test that is missing from the G3 run counts as failing** only when the run
+  exited non-zero (e.g. ImportError because the feature does not exist yet).
+- **D19 G4 also checks the feature tests inside the full suite**; if they fail there only, the
+  reject code is FEATURE_TESTS_FAIL_WITH_PATCH (test-order or pollution problem).
+- **D20 G6 empty-patch control reuses G3** (same run, no extra sandbox). Mutants change only
+  lines the patch adds, so they apply wherever the reference applies. Operators skip comments
+  and operators inside string literals, to avoid mutants that cannot change behaviour.
+- **D21 Hand-written drafts** (`task.json`, `requirements.md`, `after/`, `tests/`, optional
+  `solution.diff`) compute their patch with git against the pinned commit. Fixtures use this
+  format; `factory validate --tasks DIR` accepts it too.
+- **D22 The local backend skips setup commands** unless `sandbox.local_run_setup = true`: it
+  would install packages into the developer's own environment. The host must already have the
+  test tools (e.g. pytest).
 
 ## Limitations
 
 - L1 LocalSandbox has no isolation and allows network; it logs a warning on every use.
 - L2 Go, Maven, Gradle and Cargo support is parser-level only so far (unit-tested on sample
   reports); only Python and Node run end to end on fixtures.
+- L3 Mutation testing is heuristic. An equivalent mutant (one that cannot change behaviour,
+  e.g. swapping the arguments of a symmetric function) survives and rejects a good task. The
+  operator set is configurable (`gates.mutations`) and every survivor is named in the report.
+- L4 `gates.task_timeout_s` is not enforced yet; each test run has its own timeout.
