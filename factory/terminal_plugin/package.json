@@ -1,0 +1,1 @@
+{"name":"task-factory-terminal","version":"0.1.0","type":"module","exports":{"./tui":"./tui.tsx"}}
