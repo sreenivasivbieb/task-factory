@@ -1,0 +1,658 @@
+# task-factory: design
+
+This document explains how task-factory is built and why. It is written for
+someone who has never seen the project: a judge, a new contributor, or an
+engineer who wants to run it on their own repository. For a short overview
+start with the [README](../README.md); for every individual assumption and
+deviation see [decisions.md](decisions.md).
+
+**Contents**
+
+1. [Goals and non-goals](#1-goals-and-non-goals)
+2. [The big picture](#2-the-big-picture)
+3. [Module map](#3-module-map)
+4. [Data flow through the work folder](#4-data-flow-through-the-work-folder)
+5. [Core data models](#5-core-data-models)
+6. [Sandbox: isolated, repeatable execution](#6-sandbox-isolated-repeatable-execution)
+7. [Repo loader and inspector](#7-repo-loader-and-inspector)
+8. [Test runner and report parsers](#8-test-runner-and-report-parsers)
+9. [Validation runner: the gates](#9-validation-runner-the-gates)
+10. [Mutation engine: negative controls](#10-mutation-engine-negative-controls)
+11. [Task packages](#11-task-packages)
+12. [Life of a task](#12-life-of-a-task)
+13. [Reproducibility guarantees](#13-reproducibility-guarantees)
+14. [How it is tested](#14-how-it-is-tested)
+15. [Extending task-factory](#15-extending-task-factory)
+16. [Roadmap](#16-roadmap)
+17. [Glossary](#17-glossary)
+
+---
+
+## 1. Goals and non-goals
+
+**The deliverable is the factory, not any single task.** It must work on a
+repository it has never seen, with no code changes, and every task it exports
+must come with evidence that it is valid.
+
+| Goal | How the design meets it |
+| --- | --- |
+| Works on any supplied repo | Language, setup and test command are detected, never hard-coded; anything unknown stops with `needs_manual_config` and the reasons |
+| Validity is proven, not claimed | Seven gates run real tests in containers; an LLM never decides pass or fail |
+| Repeatable | Pinned commit, image tag derived from inputs, fixed environment variables, deterministic task IDs and checksums |
+| Auditable | Every gate keeps its command, exit code, output and parsed results as a log file inside the package |
+| Isolated and safe | A fresh container per gate, no network, memory/CPU/process limits, non-root user |
+| Honest | Manual edits are flagged; limitations are written down in `decisions.md` |
+
+**Not in scope:** training models, a web UI, a leaderboard, tasks that need network
+access or external services, and (until the organizers confirm) security or
+exploit-style tasks.
+
+## 2. The big picture
+
+```mermaid
+flowchart TB
+    subgraph IN["Input"]
+        REPO[("Supplied repository<br/>path · git URL · zip")]
+    end
+
+    subgraph S1["Stage 1 · Environment (built)"]
+        LOAD[Repo loader<br/>copy + pin commit]
+        INSP[Inspector<br/>detect language, setup, tests]
+        IMG[(Sandbox image<br/>cached by tag)]
+        LOAD --> INSP --> IMG
+    end
+
+    subgraph S2["Stage 2 · Task creation (next)"]
+        FS[Feature source<br/>docs, TODOs, issues, code gaps]
+        GEN[Task generator<br/>requirements · patch · tests]
+        VAR[Variation manager<br/>reject near-duplicates]
+        FS --> GEN
+        VAR -.->|next_targets: under-represented tags| FS
+    end
+
+    subgraph S3["Stage 3 · Proof (built)"]
+        VAL{{"Validation runner<br/>gates G0–G6"}}
+        PKG[Package writer]
+        REJ[(rejections.jsonl)]
+    end
+
+    subgraph OUT["Output"]
+        TASKS[("Task packages")]
+        REP["Evidence report<br/>(next)"]
+    end
+
+    REPO --> LOAD
+    IMG --> VAL
+    GEN --> VAL
+    VAL -- valid --> VAR --> PKG --> TASKS
+    VAL -- rejected --> REJ
+    REJ -.->|repair strategy| GEN
+    TASKS --> REP
+    REJ --> REP
+```
+
+Three ideas shape the whole system:
+
+1. **Only executed tests decide validity.** Models may write requirements,
+   patches and tests, but the verdict comes from the validation runner, which
+   only runs code.
+2. **Every step is a pure function of files.** Each command reads JSON from the
+   work folder and writes JSON back. Steps can be rerun, resumed and inspected.
+3. **Anything the organizers have not fixed yet sits behind one adapter.** The
+   package layout, the repo delivery format and the LLM provider can each be
+   swapped by changing a single module.
+
+## 3. Module map
+
+```mermaid
+flowchart LR
+    CLI["cli.py<br/>argparse, exit codes"] --> CMD["commands.py<br/>one handler per command"]
+
+    subgraph core["factory/"]
+        MOD["models.py<br/>all shared schemas"]
+        CFG["config.py<br/>factory.toml + flags"]
+        ERR["errors.py<br/>typed exceptions"]
+    end
+
+    subgraph built["Built (M0–M5)"]
+        SB["sandbox/<br/>base · docker_backend · local_backend"]
+        RP["repo/<br/>loader · inspector"]
+        RN["runner/<br/>test_runner · parsers · node reporter"]
+        VA["validation/<br/>gates · mutations · drafts"]
+        PK["packaging/<br/>writer · verify · toml_writer"]
+    end
+
+    subgraph planned["Planned (M6–M12)"]
+        LLM["llm/"]
+        GE["generation/"]
+        FE["features/"]
+        VR["variation/"]
+        RE["report/"]
+        BE["benchmark/"]
+    end
+
+    CMD --> RP & VA & PK
+    RP --> SB & RN
+    VA --> SB & RN
+    PK --> VA
+    GE --> LLM & VA
+    FE --> LLM
+
+    classDef plan fill:#f1f5f9,stroke:#94a3b8,color:#334155,stroke-dasharray: 4 3;
+    class LLM,GE,FE,VR,RE,BE plan;
+```
+
+Rules the code follows:
+
+- `cli.py` holds no business logic. Each command calls exactly one component.
+- Components never pass raw dicts to each other; they pass the pydantic models from `models.py`.
+- No provider-specific LLM code outside `llm/`.
+- Errors are typed (`BuildError`, `SandboxStartError`, `RepoLoadError`, `PackageError`, …).
+  The CLI maps them to exit codes. There is no bare `except` and no silent retry.
+
+## 4. Data flow through the work folder
+
+Every command reads and writes plain files under `workdir/`, which is why a run
+can be stopped at any point and resumed.
+
+```mermaid
+flowchart LR
+    A["factory load"] -->|writes| RS["repo_spec.json<br/>repos/NAME/"]
+    RS --> B["factory inspect"]
+    B -->|writes| EC["env_config.json<br/>inspect.json (baseline)"]
+    EC --> C["factory validate"]
+    RS --> C
+    C -->|writes| RUN["runs/TASK_ID/<br/>draft.json · report.json · gate logs"]
+    C -->|appends| RJ["rejections.jsonl"]
+    RUN --> D["factory export"]
+    D -->|writes| PK["OUT/TASK_ID/ packages"]
+    PK --> C
+```
+
+```text
+workdir/
+├── repo_spec.json          pinned repo (RepoSpec)
+├── inspect.json            inspector result + baseline test run
+├── env_config.json         how to build and test (EnvConfig)
+├── repos/<name>/           our copy of the repo (the original is never edited)
+├── cache/baseline/         baseline results, one file per image tag
+├── runs/<task_id>/         draft.json, report.json, one log file per gate run
+├── rejections.jsonl        one line per rejected task: code, reason, log paths
+└── logs/run-*.jsonl        structured log of every command, LLM and container call
+```
+
+A finished step is skipped on the next run unless `--force` is given.
+
+## 5. Core data models
+
+All models live in `factory/models.py`, carry `schema_version`, reject unknown
+fields and serialize to JSON.
+
+```mermaid
+classDiagram
+    direction LR
+    class RepoSpec {
+        name
+        source
+        commit_sha
+        local_path
+        language
+        synthetic_history
+    }
+    class EnvConfig {
+        base_image
+        setup_commands
+        test_command
+        framework
+        report_format
+        report_path
+        test_timeout_s
+        env_vars
+    }
+    class TaskDraft {
+        task_id
+        kind
+        tags
+        requirements_md
+        solution_patch
+        test_files
+        touched_files
+        generated_by
+        manual_edit
+    }
+    class ValidationReport {
+        verdict
+        reject_code
+        reject_reason
+        fail_to_pass
+        pass_to_pass
+        flaky_tests
+        mutation_score
+    }
+    class GateResult {
+        gate
+        passed
+        details
+        exec_log_paths
+        duration_s
+    }
+    class TaskPackage {
+        task_id
+        repo
+        commit_sha
+        environment
+        fail_to_pass
+        pass_to_pass
+        validation summary
+    }
+    RepoSpec --> EnvConfig : inspector
+    RepoSpec --> TaskDraft : generator
+    TaskDraft --> ValidationReport : validator
+    ValidationReport "1" *-- "many" GateResult
+    TaskDraft --> TaskPackage : writer
+    ValidationReport --> TaskPackage : writer
+```
+
+Two rules give stable identities:
+
+- **Task ID** = `<repo>-<short_sha>-<slug>-<nnn>`, for example
+  `toyshop-a471ba4-bulk-discount-on-cart-lines-007`. Same repo, commit, title
+  and number always give the same ID.
+- **Reject codes** are a fixed enum: `BASELINE_FAIL`, `PATCH_APPLY_FAIL`,
+  `FEATURE_TESTS_FAIL_WITH_PATCH`, `FEATURE_TESTS_PASS_WITHOUT_PATCH`,
+  `REGRESSION`, `FLAKY`, `NEG_CONTROL_PASSED`.
+
+## 6. Sandbox: isolated, repeatable execution
+
+Every gate, and later every solver run, executes inside a sandbox. The
+interface is small:
+
+```python
+class Sandbox:
+    def exec(argv, *, timeout_s, env=None, cwd=None) -> ExecResult   # never raises on non-zero exit
+    def write_file(path, content) -> None
+    def read_file(path) -> bytes
+    def apply_patch(diff) -> ExecResult                             # git apply --check, then git apply
+    def close() -> None                                             # also runs on exceptions
+
+class SandboxFactory:
+    def build_image(spec, env) -> ImageRef
+    def new_sandbox(image, *, network=False) -> Sandbox             # context manager
+```
+
+### How an image is built
+
+```mermaid
+flowchart TD
+    A["git archive COMMIT_SHA<br/>(exactly the pinned files)"] --> B["Generated Dockerfile"]
+    B --> L1["FROM base_image<br/>e.g. python:3.11-slim"]
+    L1 --> L2["install git if missing<br/>(apt · apk · yum)"]
+    L2 --> L3["create non-root user 'factory' (uid 10001)"]
+    L3 --> L4["ADD repo.tar /repo<br/>git init + commit 'base'"]
+    L4 --> L5["RUN each setup command<br/>(network allowed only here)"]
+    L5 --> L6["chown /repo to factory"]
+    L6 --> T[("Image tag = hash of<br/>commit SHA + base image +<br/>setup commands + prelude version")]
+```
+
+Because the tag is a hash of its inputs, an existing image is reused and
+nothing is rebuilt. Change any input and you get a new tag.
+
+### Isolation rules
+
+| Rule | Value |
+| --- | --- |
+| Container per sandbox | always new, never reused between gates; removed on `close()`, even after an exception |
+| Network | `--network none` (only the image build may download dependencies) |
+| Limits | 2 GB memory, 2 CPUs, 512 processes (configurable) |
+| User | commands run as the non-root `factory` user when the image allows it |
+| Fixed environment | `TZ=UTC`, `LANG=C.UTF-8`, `PYTHONHASHSEED=0`, `CI=1` |
+| Timeout | hard; on timeout every process except PID 1 is killed and `timed_out=true` |
+| Output | stdout and stderr cut at 1 MB each, with a visible truncation marker |
+
+### One command with a timeout
+
+```mermaid
+sequenceDiagram
+    participant G as Gate
+    participant D as DockerSandbox
+    participant C as Container (sleep infinity)
+    G->>D: exec(["sh","-c","pytest …"], timeout_s=600)
+    D->>C: docker exec --user factory …
+    alt finishes in time
+        C-->>D: exit code, stdout, stderr
+    else timeout
+        D->>C: kill -9 -1 (all processes except PID 1)
+        D-->>D: timed_out = true
+    end
+    D-->>G: ExecResult (never an exception for a failing command)
+```
+
+A second backend, `LocalSandbox`, runs in a temporary folder on the host. It
+exists only to make unit tests fast, has **no isolation**, and logs a warning on
+every use.
+
+## 7. Repo loader and inspector
+
+**Loader.** Accepts a local path, a git URL or a zip. It copies the repo to
+`workdir/repos/<name>`, checks out the requested commit (default `HEAD`) and
+records the full 40-character SHA. It refuses a working tree with uncommitted
+changes. A zip or folder without git history gets a *synthetic* commit with a
+fixed author and date, so the same zip always gives the same SHA.
+
+**Inspector.** Detects the environment from marker files and never guesses
+silently:
+
+| Marker | Base image | Setup | Test command |
+| --- | --- | --- | --- |
+| `pyproject.toml`, `setup.py`, `requirements*.txt` | `python:3.11-slim` (raised by `requires-python`) | `pip install -e '.[test]'`, requirement files, pytest | pytest with a JUnit report |
+| `package.json` + `package-lock.json` | `node:22-slim` | `npm ci` (yarn, pnpm supported) | Jest, Vitest or node:test |
+| `pom.xml` / `build.gradle` | Maven / Gradle JDK 17 | dependencies go offline at build time | `mvn -o test` / `gradle --offline test` |
+| `go.mod` | `golang:1.22` | `go mod download` | `go test -json` |
+| `Cargo.toml` | `rust:1-slim` | `cargo fetch`, build tests | `cargo test --offline` |
+
+Anything else, or an unknown Node test runner, returns `needs_manual_config`
+with the reasons. Every field can be overridden in `factory.toml` under `[env]`.
+The **smoke check** then builds the image and runs the full suite once; a crash
+at this point is reported, not ignored.
+
+## 8. Test runner and report parsers
+
+The test command is a template with two placeholders:
+
+```text
+python -m pytest -q -o junit_family=xunit1 --junitxml={report} {select}
+```
+
+- `{report}` becomes the report path inside the repo (`.factory/report.xml`).
+- `{select}` becomes the chosen tests or test files; empty means the full suite.
+
+The runner prefers machine-readable reports over scraping text:
+
+| Format | Frameworks | Example test ID |
+| --- | --- | --- |
+| JUnit XML | pytest, node:test, Maven Surefire, Gradle, Vitest | `tests/test_cart.py::test_add_and_quantity` |
+| Jest JSON | Jest | `src/sum.test.js::sum adds` |
+| `go test -json` | Go | `example.com/m/calc::TestAdd` |
+| libtest text | Cargo | `calc::tests::adds` |
+
+Two rules prevent false confidence:
+
+- **A crash is never "all passed".** A non-zero exit with no parsed tests (a build
+  or import error) is reported as an error with the last lines of output.
+- **Flaky tests are named.** `run_repeated` runs the same selection several
+  times; any test whose status changes between runs is flaky.
+
+Node's built-in JUnit reporter omits the test file before Node 23, which made
+IDs ambiguous. The runner therefore writes a small reporter
+(`runner/node_junit_reporter.mjs`) into the sandbox and uses it for node:test
+projects.
+
+## 9. Validation runner: the gates
+
+The validation runner turns a `TaskDraft` into a `ValidationReport`. Every gate
+starts a fresh sandbox from the same image, saves its log, and the first
+failure stops the run with its reject code.
+
+```mermaid
+sequenceDiagram
+    participant V as Validator
+    participant F as SandboxFactory
+    participant S as Fresh sandbox
+    V->>F: build_image(spec, env)  [cached]
+    Note over V: G0 baseline: run once per image, then cached on disk
+    loop G1, G2, G3, G4, each mutant (G6), G5
+        V->>F: new_sandbox(image)
+        F-->>V: new container, no network
+        V->>S: apply patch (or a mutant, or nothing)
+        V->>S: write the hidden test files
+        V->>S: run tests (selected files or full suite)
+        S-->>V: RunSummary (per-test status)
+        V->>S: close (container removed)
+    end
+    V-->>V: verdict + fail_to_pass + pass_to_pass + mutation score
+```
+
+### What each gate checks, exactly
+
+| Gate | Patch applied | Tests run | Passes when | Reject code |
+| --- | --- | --- | --- | --- |
+| **G0** Baseline | none | full existing suite | it runs, something passes, and failing tests ≤ 20% (they become `known_failures` and are ignored later) | `BASELINE_FAIL` |
+| **G1** Patch applies | reference | none | `git apply --check` succeeds and the patch is not empty | `PATCH_APPLY_FAIL` |
+| **G2** Feature passes | reference | the task's test files | every *new* test ID passes; at least one exists | `FEATURE_TESTS_FAIL_WITH_PATCH` |
+| **G3** Feature fails without patch | none | the task's test files | every new test fails; tests that pass are named in the reason | `FEATURE_TESTS_PASS_WITHOUT_PATCH` |
+| **G4** Regression | reference | full suite + new tests | every test that passed at baseline still passes, and the new tests pass inside the full suite too | `REGRESSION` |
+| **G6** Negative control | each mutant | the task's test files | every mutant makes at least one new test fail | `NEG_CONTROL_PASSED` |
+| **G5** Stability | reference | G2's selection and G4's full suite, repeated N times | every test has the same status in every run | `FLAKY` |
+
+Details that matter:
+
+- **Feature tests are the new test IDs**, meaning IDs present in the task's
+  test files but not in the baseline. A task may therefore extend an existing
+  test file; the old tests in it count as existing tests.
+- **In G3, a missing test counts as failing** only if the run exited non-zero
+  (for example an `ImportError` because the function does not exist yet).
+- **G5 runs last** because it is the most expensive, and only for tasks that
+  already passed everything else. Its repeats happen inside one fresh sandbox,
+  so tests that depend on state left by an earlier run are caught too.
+- **Running the same task twice gives the same verdict, codes and test lists.**
+  A test checks this.
+
+### Cost per task
+
+| Work | Sandboxes |
+| --- | --- |
+| G0 baseline | 1 per image, then cached |
+| G1, G2, G3, G4 | 4 |
+| G6 | 1 per mutant (the empty-patch control reuses G3) |
+| G5 | 1 (with N repeats inside) |
+
+With the development defaults (2 mutants, 1 repeat) that is about 7 containers
+per task; the toy tasks validate in a few seconds each.
+
+## 10. Mutation engine: negative controls
+
+G3 shows that the tests fail when the feature is **absent**. It does not show
+that they fail when the feature is **wrong**. G6 closes that gap: it takes the
+reference patch, breaks it in small plausible ways, and checks that the hidden
+tests notice.
+
+Mutants change only lines the patch **adds**, so a mutant applies wherever the
+reference applies.
+
+| Operator | Before (reference line) | After (mutant) |
+| --- | --- | --- |
+| `empty` | the whole patch | no patch (reuses G3) |
+| `flip_comparison` | `if qty >= BULK_MIN_QTY:` | `if qty > BULK_MIN_QTY:` |
+| `drop_error_branch` | `raise ValueError("bad wpm")` / `throw new RangeError(…)` | `pass` / `;` |
+| `swap_arguments` | `x = g(a, b)` | `x = g(b, a)` |
+| `hardcode_expected` | `return amount` | `return 900` (a value the tests expect) |
+| `revert_half` | two hunks | only the first hunk (a partial implementation) |
+
+```mermaid
+flowchart LR
+    P[Reference patch] --> M1["flip #gt;= to #gt;"]
+    P --> M2["drop the raise"]
+    P --> M3["hard-code 900"]
+    M1 & M2 & M3 --> T{Hidden tests}
+    T -- "at least one test fails" --> C[caught ✔]
+    T -- "all tests still pass" --> W["tests too weak ✘<br/>NEG_CONTROL_PASSED"]
+```
+
+**Safety rules.** Operators skip comment lines, function and import lines, and
+operators inside string literals, because a mutant that cannot change behaviour
+would reject a good task unfairly. Mutants identical to the reference or to
+each other are dropped. The report records how many mutants ran and how many
+were caught (`mutation_score`).
+
+**Known limit.** Mutation testing is heuristic. An *equivalent* mutant (one that
+cannot change behaviour, such as swapping the arguments of a symmetric function)
+survives and rejects a good task. The operator set is configurable
+(`gates.mutations`), and every survivor is named in the reject reason so a person
+or the repair loop can see why.
+
+## 11. Task packages
+
+```text
+toyshop-a471ba4-bulk-discount-on-cart-lines-007/
+├── instruction.md            requirements: the ONLY file the solver sees
+├── task.toml                 metadata (below)
+├── solution/solution.diff    reference patch (hidden)
+├── tests/
+│   ├── files/tests/test_bulk_discount.py   hidden feature tests at their repo paths
+│   └── run_tests.sh          copies the tests into a working copy and runs them
+├── environment/
+│   ├── Dockerfile            rebuilds the exact sandbox image
+│   └── env.json              EnvConfig
+├── validation/
+│   ├── report.json           every gate with its details
+│   └── logs/G0.json …        raw command, exit code, output, parsed results
+└── checksums.txt             SHA-256 of every task file
+```
+
+An excerpt of a real `task.toml`:
+
+```toml
+task_id = "toyshop-a471ba4-bulk-discount-on-cart-lines-007"
+repo_name = "toyshop"
+commit_sha = "a471ba47d0913375f9bcbb3b7557bca97f39c881"
+language = "python"
+kind = "feature"
+tags = ["validation rule", "data transformation"]
+touched_files = ["toyshop/pricing.py"]
+fail_to_pass = ["tests/test_bulk_discount.py::test_bulk_discount_boundary", "…in_subtotal", "…rounds_half_up"]
+pass_to_pass = ["tests/test_cart.py::test_add_and_quantity", "…"]   # 28 tests
+manual_edit = false
+
+[environment]
+base_image = "python:3.11-slim"
+framework = "pytest"
+
+[validation]
+verdict = "valid"
+gates = ["G0", "G1", "G2", "G3", "G4", "G6", "G5"]
+mutation_score = 1.0
+```
+
+### Writing and re-verifying
+
+```mermaid
+flowchart LR
+    subgraph write["write_package"]
+        W1[valid report only] --> W2[build in a temp folder] --> W3[compute checksums] --> W4[rename into place]
+    end
+    subgraph verify["verify_package"]
+        V1[check checksums] --> V2[read task.toml + files] --> V3[reload repo at commit_sha] --> V4[rebuild image from env.json] --> V5[run all gates again] --> V6[compare fail_to_pass and pass_to_pass]
+    end
+    write --> PKG[(package)] --> verify
+```
+
+- Only tasks with verdict `valid` are written. A rejected task writes nothing.
+- Writes are atomic: the package is built in a temporary folder and renamed, so
+  a crash never leaves half a package.
+- `checksums.txt` covers the task files (instruction, `task.toml`, solution,
+  tests, environment). It leaves out `validation/`, because logs contain
+  timings that differ on every run and would break "same seed, same checksums".
+- The package layout lives in `packaging/writer.py` only. When the organizers
+  publish their template, that one module changes.
+
+## 12. Life of a task
+
+```mermaid
+stateDiagram-v2
+    [*] --> Idea : feature source (M7)
+    Idea --> Draft : task generator (M6)
+    Draft --> Validating : factory validate
+    Validating --> Rejected : first failing gate
+    Validating --> Valid : all seven gates pass
+    Rejected --> Draft : repair strategy, at most 3 times (M6)
+    Rejected --> Logged : out of repairs
+    Logged --> [*]
+    Valid --> Exported : package writer
+    Exported --> Reverified : factory validate on the package
+    Reverified --> [*]
+```
+
+Today, drafts are written by hand in a simple folder format (`task.json`,
+`requirements.md`, `after/` with the changed source files, `tests/`). The
+factory computes the reference diff from `after/` with git, so a hand-written
+task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LLM.
+
+## 13. Reproducibility guarantees
+
+| Source of variation | How it is pinned |
+| --- | --- |
+| Repo content | full commit SHA; synthetic history uses a fixed author and date |
+| Environment | image tag = hash of commit, base image, setup commands and prelude version |
+| Runtime | fixed `TZ`, `LANG`, `PYTHONHASHSEED`; no network |
+| Test identity | stable string IDs from machine-readable reports |
+| Task identity | deterministic `task_id` from repo, commit, title and number |
+| Package content | deterministic files and checksums (timings live outside the checksum) |
+| LLM output (M6) | responses cached by prompt hash, so reruns replay identically |
+
+## 14. How it is tested
+
+There are 106 tests. Unit tests use two small fixture repositories that are rich
+enough to show real failure modes:
+
+| Fixture | Contents |
+| --- | --- |
+| `toy_python_repo` (toyshop) | 6 modules with real dependencies, 28 tests incl. one slow and one switchable flaky test, README roadmap and TODO |
+| `toy_node_repo` (textkit) | 4 modules, 22 node:test tests incl. slow and flaky, README roadmap and TODO |
+| `tasks/python`, `tasks/node` | per repo: one good task, one broken task per reject code, and a "looks right but wrong" mutant |
+
+```mermaid
+flowchart LR
+    subgraph fixtures["Fixture tasks (per language)"]
+        G[good task] --> V[valid]
+        B1[stale patch] --> R1[PATCH_APPLY_FAIL]
+        B2[wrong threshold] --> R2[FEATURE_TESTS_FAIL_WITH_PATCH]
+        B3[tests check old behaviour] --> R3[FEATURE_TESTS_PASS_WITHOUT_PATCH]
+        B4[also breaks money format] --> R4[REGRESSION]
+        B5[test depends on leftover state] --> R5[FLAKY]
+        B6[tests skip the boundary] --> R6[NEG_CONTROL_PASSED]
+    end
+```
+
+Docker tests are marked `docker` and skip with a clear message when Docker is
+missing; `uv run pytest -m "not docker"` runs the rest in seconds.
+
+## 15. Extending task-factory
+
+| You want to… | Change |
+| --- | --- |
+| Support a new language | add one rule in `repo/inspector.py` (`RULES`), and one parser in `runner/parsers/` if its report format is new |
+| Use the official package template | rewrite `packaging/writer.py` and `packaging/verify.py`; nothing else knows the layout |
+| Use Podman instead of Docker | set `sandbox.docker_binary = "podman"` |
+| Tune strictness | `gates.mutations`, `gates.stability_repeats`, `gates.max_known_failure_ratio` in `factory.toml` |
+| Fix a detection mistake | override any `EnvConfig` field under `[env]` in `factory.toml` |
+| Plug in an LLM provider (M6) | implement the `LLMClient` interface in `llm/` |
+
+## 16. Roadmap
+
+| Milestone | Component | What it adds |
+| --- | --- | --- |
+| M6 | LLM client + task generator | requirements, reference patch and tests from a feature idea; the tests are written from the requirements only, without seeing the patch; targeted repair strategies per reject code |
+| M7 | Feature source | ideas from docs, TODO/FIXME, issues, history and code gaps, each with evidence; filters for already-implemented, too large or unsafe ideas |
+| M8 | Variation manager | rejects near-duplicates (text similarity, file overlap, identical normalized patches) and balances tags |
+| M9 | Report generator | funnel, rejection breakdown, per-task gate table, variation table, cost, limitations |
+| M10 | Orchestrator | `factory run` does every step in one command |
+| M11 | Real runs | at least 10 valid, varied tasks on the organizers' repo, plus a second repo with no code change |
+| M12 | Extras | optional solver benchmark, demo script, video, deck |
+
+The LLM provider is not chosen yet; the client stays provider-agnostic until
+hackathon credits are known.
+
+## 17. Glossary
+
+| Term | Meaning |
+| --- | --- |
+| **Task package** | A folder with requirements, reference patch, hidden tests, environment and evidence |
+| **Reference patch** | A unified diff that implements the task against the pinned commit |
+| **fail_to_pass** | New tests that fail on the original repo and pass with the reference patch |
+| **pass_to_pass** | Existing tests that passed before and must still pass |
+| **Known failures** | Tests already failing at baseline; recorded and excluded |
+| **Mutant** | A deliberately wrong variant of the reference patch |
+| **Mutation score** | Mutants caught ÷ mutants run |
+| **Gate** | One validation check (G0–G6) with its own fresh sandbox and log |
+| **Sandbox** | An isolated working copy of the pinned repo (a container) |
+| **Workdir** | The folder where every step keeps its JSON input and output |
