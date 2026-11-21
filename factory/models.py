@@ -238,6 +238,40 @@ class ValidationReport(Model):
     mutants_caught: int = 0
 
 
+class ValidationSummary(Model):
+    verdict: Literal["valid", "rejected"]
+    gates: list[str] = Field(default_factory=list)
+    mutation_score: float | None = None
+    mutants_run: int = 0
+    mutants_caught: int = 0
+
+
+class TaskPackage(Model):
+    """Contents of ``task.toml``: the metadata of one exported task package (section 13)."""
+
+    task_id: str
+    repo: str  # URL or path the repo was loaded from
+    repo_name: str
+    commit_sha: str  # the starting version
+    language: str | None = None
+    test_command: str
+    kind: TaskKind
+    tags: list[str] = Field(default_factory=list)
+    idea_id: str
+    touched_files: list[str] = Field(default_factory=list)
+    test_files: list[str] = Field(default_factory=list)
+    fail_to_pass: list[str] = Field(default_factory=list)
+    pass_to_pass: list[str] = Field(default_factory=list)
+    known_failures: list[str] = Field(default_factory=list)
+    manual_edit: bool = False
+    manual_edit_reason: str | None = None
+    difficulty: str | None = None
+    solver_results: dict[str, float] | None = None
+    environment: EnvConfig
+    generated_by: GeneratedBy = Field(default_factory=GeneratedBy)
+    validation: ValidationSummary
+
+
 # --------------------------------------------------------------------------- helpers
 
 

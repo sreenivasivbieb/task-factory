@@ -59,6 +59,13 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
 - **D22 The local backend skips setup commands** unless `sandbox.local_run_setup = true`: it
   would install packages into the developer's own environment. The host must already have the
   test tools (e.g. pytest).
+- **D23 `checksums.txt` covers the task files** (instruction, task.toml, solution, tests,
+  environment) but not `validation/`: gate logs hold timings, so they differ on every run and
+  would break "same seed, same checksums". `verify_package` regenerates the evidence instead.
+- **D24 `factory validate` saves each draft** next to its report in `workdir/runs/<task_id>/`;
+  `factory export` writes packages from the valid ones.
+- **D25 `verify_package` reloads the repo** from `task.toml`'s `repo` + `commit_sha`, so the
+  source must still be reachable (URL or path). The repo itself is not copied into packages.
 
 ## Limitations
 

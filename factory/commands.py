@@ -87,6 +87,7 @@ def _validation_targets(path):
 
 
 def cmd_validate(args: argparse.Namespace, cfg: FactoryConfig) -> int:
+    from .errors import PackageError
     from .sandbox import make_factory
     from .validation.drafts import load_draft_dir
     from .validation.gates import Validator, append_rejection
@@ -100,12 +101,19 @@ def cmd_validate(args: argparse.Namespace, cfg: FactoryConfig) -> int:
         if (target / "task.toml").exists():
             from .packaging.verify import verify_package
 
-            report = verify_package(target, factory, cfg, log_dir=wd.runs)
+            try:
+                report = verify_package(target, factory, cfg, log_dir=wd.runs)
+            except PackageError as exc:
+                log.error("%s", exc)
+                print(f"{'invalid':9} {'PACKAGE_ERROR':34} {target.name}")
+                continue
         else:
             spec, env = load_state(cfg)
             if validator is None:
                 validator = Validator(factory, spec, env, cfg.gates, log_dir=wd.runs, cache_dir=wd.cache)
-            report = validator.validate(load_draft_dir(target, spec, n=i))
+            draft = load_draft_dir(target, spec, n=i)
+            draft.save(wd.runs / draft.task_id / "draft.json")
+            report = validator.validate(draft)
         if report.verdict == "valid":
             valid += 1
         else:
@@ -114,3 +122,21 @@ def cmd_validate(args: argparse.Namespace, cfg: FactoryConfig) -> int:
         print(f"{report.verdict:9} {code:34} {report.task_id}")
     print(f"{valid}/{len(targets)} valid")
     return 0 if valid else 4
+
+
+def cmd_export(args: argparse.Namespace, cfg: FactoryConfig) -> int:
+    from .models import TaskDraft, ValidationReport
+    from .packaging.writer import write_package
+
+    wd = Workdir(cfg.workdir)
+    spec, env = load_state(cfg)
+    written = 0
+    for report_path in sorted(wd.runs.glob("*/report.json")):
+        draft_path = report_path.with_name("draft.json")
+        report = ValidationReport.load(report_path)
+        if report.verdict != "valid" or not draft_path.exists():
+            continue
+        write_package(TaskDraft.load(draft_path), report, spec, env, args.out)
+        written += 1
+    print(f"exported {written} package(s) to {args.out}")
+    return 0 if written else 4
