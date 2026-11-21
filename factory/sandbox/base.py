@@ -144,8 +144,10 @@ class SandboxFactory(abc.ABC):
         """Start a fresh sandbox from an image."""
 
     @abc.abstractmethod
-    def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
-        """Build an image on top of ``base`` that runs ``commands`` as root (e.g. install an agent)."""
+    def build_derived_image(self, base: ImageRef, name: str, commands: list[str],
+                            files: dict[str, Path] | None = None) -> ImageRef:
+        """Build an image on top of ``base`` that copies ``files`` (image path -> host file) and
+        runs ``commands`` as root (e.g. install an agent)."""
 
     def pin_image(self, image: str) -> str:
         """``image`` pinned by digest (``name:tag@sha256:...``) where the backend can; else unchanged."""

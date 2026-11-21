@@ -19,6 +19,16 @@ from .base import FIXED_ENV, Sandbox, SandboxFactory, git_archive, image_tag, re
 log = logging.getLogger("factory.sandbox.docker")
 
 
+
+def _file_digest(path: Path) -> str:
+    import hashlib
+
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for block in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
 class DockerSandboxFactory(SandboxFactory):
     def __init__(self, cfg: SandboxConfig | None = None) -> None:
         self.cfg = cfg or SandboxConfig()
@@ -89,20 +99,28 @@ class DockerSandboxFactory(SandboxFactory):
         log.info("pinned base image %s", pinned)
         return pinned
 
-    def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
-        if not commands:
+    def build_derived_image(self, base: ImageRef, name: str, commands: list[str],
+                            files: dict[str, Path] | None = None) -> ImageRef:
+        files = files or {}
+        if not commands and not files:
             return base
         import hashlib
         import json
 
-        digest = hashlib.sha256(json.dumps([base.tag, commands]).encode()).hexdigest()[:16]
+        contents = {dest: _file_digest(src) for dest, src in sorted(files.items())}
+        digest = hashlib.sha256(json.dumps([base.tag, commands, contents]).encode()).hexdigest()[:16]
         tag = f"{base.tag.split(':')[0]}-{name}:{digest}"
         if self.image_exists(tag):
             return ImageRef(tag=tag, backend="docker")
-        lines = [f"FROM {base.tag}", "USER root"] + [f"RUN {c}" for c in commands]
+        lines = [f"FROM {base.tag}", "USER root"]
+        for i, dest in enumerate(sorted(files)):
+            lines += [f"COPY {json.dumps([f'file-{i}', dest])}", f"RUN chmod 755 {json.dumps(dest)}"]
+        lines += [f"RUN {c}" for c in commands]
         lines.append("RUN (id factory >/dev/null 2>&1 && chown -R factory /repo) || true")
         with tempfile.TemporaryDirectory(prefix="factory-derived-") as ctx:
             (Path(ctx) / "Dockerfile").write_text("\n".join(lines) + "\n", encoding="utf-8")
+            for i, dest in enumerate(sorted(files)):
+                shutil.copy2(files[dest], Path(ctx) / f"file-{i}")
             try:
                 r = self._run(["build", "-t", tag, ctx], timeout=self.cfg.build_timeout_s)
             except subprocess.TimeoutExpired as exc:

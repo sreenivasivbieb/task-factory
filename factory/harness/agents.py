@@ -18,6 +18,8 @@ Add your own agent in ``factory.toml``::
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,8 +28,14 @@ from ..errors import ConfigError
 
 _ENSURE_NODE = ("command -v npm >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq "
                 "--no-install-recommends nodejs npm ca-certificates && rm -rf /var/lib/apt/lists/*)")
-# OpenCode v2 ships as @opencode/cli (the older "opencode-ai" package is v1 and lacks --standalone).
-OPENCODE_VERSION = "2.3.2"
+ENGINE_IN_IMAGE = "/usr/local/bin/task-factory-engine"
+_ENGINE_ON_HOST = "{task_factory_engine}"  # resolved when the registry is built
+
+
+def engine_on_host() -> str:
+    """Where ``scripts/build_terminal.py`` installs the Task Factory engine."""
+    data = Path(os.environ.get("XDG_DATA_HOME") or (Path.home() / ".local/share"))
+    return str(data / "task-factory" / "bin" / "task-factory-engine")
 
 _BEDROCK = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_REGION_NAME",
             "AWS_BEARER_TOKEN_BEDROCK"]
@@ -46,10 +54,12 @@ class AgentSpec(BaseModel):
     kind: Literal["command", "oracle", "noop"] = "command"
     description: str = ""
     install: list[str] = Field(default_factory=list)  # run as root when building the agent image
+    files: dict[str, str] = Field(default_factory=dict)  # image path -> host file, copied before install
     run: str = ""  # shell command, run as the sandbox user in the repo
     model_flag: str = ""  # e.g. "--model {model}"
     default_model: str | None = None
     secrets: list[str] = Field(default_factory=list)  # forwarded from the host when set
+    secrets_optional: bool = False  # True when some models need no key (e.g. free Zen models)
     env: dict[str, str] = Field(default_factory=dict)
     network: bool = True
     timeout_s: int = 1800
@@ -91,16 +101,17 @@ BUILTIN: dict[str, AgentSpec] = {
             "--message-file {instruction_file} {model_args}",
         model_flag="--model {model}", secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY"],
         experimental=True, homepage="https://github.com/Aider-AI/aider"),
-    "opencode": AgentSpec(
-        description="OpenCode CLI (opencode run --auto). Any OpenCode provider: nvidia/..., tokenrouter/..., "
-                    "opencode/... (Zen), amazon-bedrock/qwen... ",
-        install=[_ENSURE_NODE, f"npm install -g @opencode/cli@{OPENCODE_VERSION}"],
-        run='opencode run --auto --standalone --format json {model_args} "$(cat {instruction_file})"',
+    "task-factory": AgentSpec(
+        description="The Task Factory terminal engine, headless (run --auto). Providers: nvidia/..., "
+                    "tokenrouter/..., Zen (free models), amazon-bedrock/qwen...",
+        files={ENGINE_IN_IMAGE: _ENGINE_ON_HOST},
+        # The engine reads the Zen key as OPENCODE_API_KEY; ours is TASK_FACTORY_API_KEY.
+        run=f'{{ [ -z "$TASK_FACTORY_API_KEY" ] || export OPENCODE_API_KEY="$TASK_FACTORY_API_KEY"; }}; '
+            f'{ENGINE_IN_IMAGE} run --auto --standalone --format json {{model_args}} "$(cat {{instruction_file}})"',
         model_flag="-m {model}",
-        secrets=["NVIDIA_API_KEY", "TOKENROUTER_API_KEY", "OPENCODE_API_KEY", "OPENROUTER_API_KEY", *_BEDROCK],
-        host_auth_file="~/.local/share/opencode/auth.json",
-        sandbox_auth_file="/home/factory/.local/share/opencode/auth.json",
-        experimental=True, homepage="https://github.com/sst/opencode"),
+        secrets=["NVIDIA_API_KEY", "TOKENROUTER_API_KEY", "TASK_FACTORY_API_KEY", "OPENROUTER_API_KEY", *_BEDROCK],
+        env={"OPENCODE_DISABLE_AUTOUPDATE": "1"}, secrets_optional=True,
+        experimental=True),
     "mini-swe-agent": AgentSpec(
         description="mini-swe-agent from the SWE-agent team (mini -y --exit-immediately); LiteLLM models such as "
                     "bedrock/qwen.qwen3-coder-480b-a35b-v1:0 or nvidia_nim/...",
@@ -115,7 +126,11 @@ BUILTIN: dict[str, AgentSpec] = {
 
 
 def agent_registry(custom: dict[str, dict] | None = None) -> dict[str, AgentSpec]:
-    agents = {name: spec.model_copy(update={"name": name}) for name, spec in BUILTIN.items()}
+    def resolve(files: dict[str, str]) -> dict[str, str]:
+        return {dest: engine_on_host() if src == _ENGINE_ON_HOST else src for dest, src in files.items()}
+
+    agents = {name: spec.model_copy(update={"name": name, "files": resolve(spec.files)})
+              for name, spec in BUILTIN.items()}
     for name, data in (custom or {}).items():
         try:
             agents[name] = AgentSpec.model_validate({**data, "name": name})

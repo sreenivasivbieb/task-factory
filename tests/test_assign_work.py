@@ -7,7 +7,7 @@ import pytest
 from factory.cli import main
 from factory.config import FactoryConfig, GatesConfig
 from factory.errors import ConfigError
-from factory.harness.agents import get_agent
+from factory.harness.agents import AgentSpec
 from factory.harness.runner import host_auth_payload
 from factory.harness.solutions import branch_name
 from factory.packaging.writer import write_package
@@ -37,35 +37,35 @@ def _config(tmp_path, py_spec, overlay: dict[str, str]) -> Path:
 
 
 def test_branch_name():
-    assert branch_name("opencode", "nvidia/qwen/qwen3-coder-480b", "toy-1") == "ai/opencode-qwen3-coder-480b/toy-1"
+    assert branch_name("task-factory", "nvidia/qwen/qwen3-coder-480b", "toy-1") == "ai/task-factory-qwen3-coder-480b/toy-1"
     assert branch_name("oracle", None, "toy-1") == "ai/oracle/toy-1"
 
 
 def test_assignment_lifecycle(workdir):
     store = TaskStore(workdir / "tasks", reviewer="tester")
     (entry,) = store.entries()
-    a = store.assign(entry.task_id, "opencode", "nvidia/x")
-    assert store.assign(entry.task_id, "opencode", "nvidia/x").ts == a.ts  # no duplicate
-    store.assign(entry.task_id, "opencode", "tokenrouter/y")
-    assert [x.label for x in store.assignments()] == ["opencode:nvidia/x", "opencode:tokenrouter/y"]
-    store.record_result(entry.task_id, "opencode", "nvidia/x", "resolved 1/1", branch="ai/b")
-    assert [x.label for x in store.assignments()] == ["opencode:tokenrouter/y"]
+    a = store.assign(entry.task_id, "task-factory", "nvidia/x")
+    assert store.assign(entry.task_id, "task-factory", "nvidia/x").ts == a.ts  # no duplicate
+    store.assign(entry.task_id, "task-factory", "tokenrouter/y")
+    assert [x.label for x in store.assignments()] == ["task-factory:nvidia/x", "task-factory:tokenrouter/y"]
+    store.record_result(entry.task_id, "task-factory", "nvidia/x", "resolved 1/1", branch="ai/b")
+    assert [x.label for x in store.assignments()] == ["task-factory:tokenrouter/y"]
     assert store.unassign(entry.task_id) == 1 and store.assignments() == []
     done = store.assignments(open_only=False)
     assert done[0].result.branch == "ai/b" and done[1].result.action == "unassign"
     assert store.get(entry.task_id).status == "pending"  # assignments never change review status
     store.delete(entry.task_id, "dup")
     with pytest.raises(ConfigError, match="deleted"):
-        store.assign(entry.task_id, "opencode", "nvidia/x")
+        store.assign(entry.task_id, "task-factory", "nvidia/x")
 
 
 def test_host_auth_only_copies_that_provider(tmp_path, monkeypatch):
     home = tmp_path / "home"
-    auth = home / ".local" / "share" / "opencode" / "auth.json"
+    auth = home / ".agent" / "auth.json"
     auth.parent.mkdir(parents=True)
     auth.write_text(json.dumps({"nvidia": {"type": "api", "key": "n-1"}, "tokenrouter": {"type": "api", "key": "t-2"}}))
     monkeypatch.setenv("HOME", str(home))
-    agent = get_agent("opencode")
+    agent = AgentSpec(name="custom", host_auth_file="~/.agent/auth.json", sandbox_auth_file="/home/factory/auth.json")
     assert json.loads(host_auth_payload(agent, "nvidia/qwen/qwen3-coder")) == {"nvidia": {"type": "api", "key": "n-1"}}
     with pytest.raises(ConfigError, match="stored: nvidia, tokenrouter"):
         host_auth_payload(agent, "amazon-bedrock/qwen.qwen3-coder-480b-a35b-v1:0")
@@ -115,3 +115,14 @@ def test_assign_unknown_agent_fails_early(workdir):
     store = TaskStore(workdir / "tasks")
     (entry,) = store.entries()
     assert main(["tasks", "assign", entry.task_id, "--agent", "nope", "--workdir", str(workdir)]) == 2
+
+
+def test_default_agent_runs_our_own_engine(monkeypatch, tmp_path):
+    from factory.harness.agents import ENGINE_IN_IMAGE, get_agent
+
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    agent = get_agent(FactoryConfig().harness.default_agent)
+    assert agent.name == "task-factory" and not agent.install
+    assert agent.files == {ENGINE_IN_IMAGE: str(tmp_path / "task-factory/bin/task-factory-engine")}
+    assert f"{ENGINE_IN_IMAGE} run --auto --standalone" in agent.command("/tmp/i.md", "nvidia/x")
+    assert "TASK_FACTORY_API_KEY" in agent.secrets

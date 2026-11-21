@@ -141,3 +141,35 @@ def test_missing_docker_binary():
 
     with pytest.raises(EnvironmentProblem):
         DockerSandboxFactory(SandboxConfig(docker_binary="definitely-not-docker"))
+
+
+@pytest.mark.docker
+def test_derived_image_copies_files(docker_factory, py_spec, py_env_docker, tmp_path):
+    tool = tmp_path / "tool"
+    tool.write_text("#!/bin/sh\necho copied-tool\n")
+    base = docker_factory.build_image(py_spec, py_env_docker)
+    image = docker_factory.build_derived_image(base, "copy-test", [], {"/usr/local/bin/copied-tool": tool})
+    assert image.tag != base.tag
+    with docker_factory.new_sandbox(image) as sb:
+        res = sb.exec(["copied-tool"], timeout_s=30)
+    assert res.exit_code == 0 and res.stdout.strip() == "copied-tool"
+    tool.write_text("#!/bin/sh\necho changed\n")
+    assert docker_factory.build_derived_image(base, "copy-test", [], {"/usr/local/bin/copied-tool": tool}).tag != image.tag
+
+
+@pytest.mark.docker
+@pytest.mark.slow
+def test_task_factory_engine_runs_in_task_image(docker_factory, py_spec, py_env_docker):
+    from pathlib import Path
+
+    from factory.harness.agents import ENGINE_IN_IMAGE, get_agent
+
+    agent = get_agent("task-factory")
+    files = {dest: Path(src) for dest, src in agent.files.items()}
+    if not all(src.is_file() for src in files.values()):
+        pytest.skip("Task Factory engine is not built")
+    base = docker_factory.build_image(py_spec, py_env_docker)
+    image = docker_factory.build_derived_image(base, agent.name, agent.install, files)
+    with docker_factory.new_sandbox(image) as sb:
+        res = sb.exec([ENGINE_IN_IMAGE, "--version"], timeout_s=60)
+    assert res.exit_code == 0 and res.stdout.strip().startswith("task-factory ")
