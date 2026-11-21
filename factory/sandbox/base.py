@@ -49,7 +49,12 @@ def truncate_output(data: bytes, limit: int) -> str:
 
 
 def git_archive(spec: RepoSpec, out_tar: Path) -> Path:
-    """Write ``git archive <commit_sha>`` of the pinned repo to ``out_tar``."""
+    """Write ``git archive <commit_sha>`` of the pinned repo to ``out_tar`` (or copy ``spec.archive``)."""
+    if spec.archive:
+        import shutil
+
+        shutil.copyfile(spec.archive, out_tar)
+        return out_tar
     r = subprocess.run(["git", "-C", spec.local_path, "archive", "--format=tar", "-o", str(out_tar),
                         spec.commit_sha], capture_output=True, text=True)
     if r.returncode != 0:
@@ -141,3 +146,7 @@ class SandboxFactory(abc.ABC):
     @abc.abstractmethod
     def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
         """Build an image on top of ``base`` that runs ``commands`` as root (e.g. install an agent)."""
+
+    def pin_image(self, image: str) -> str:
+        """``image`` pinned by digest (``name:tag@sha256:...``) where the backend can; else unchanged."""
+        return image

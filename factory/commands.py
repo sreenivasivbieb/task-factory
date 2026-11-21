@@ -135,7 +135,7 @@ def cmd_export(args: argparse.Namespace, cfg: FactoryConfig) -> int:
 
     wd = Workdir(cfg.workdir)
     spec, env = load_state(cfg)
-    written = 0
+    written = skipped = 0
     for report_path in sorted(wd.runs.glob("*/report.json")):
         draft_path = report_path.with_name("draft.json")
         report = ValidationReport.load(report_path)
@@ -145,11 +145,16 @@ def cmd_export(args: argparse.Namespace, cfg: FactoryConfig) -> int:
         if (Path(out) / TRASH / report.task_id).exists():
             log.info("%s was deleted by a reviewer; not exported again", report.task_id)
             continue
+        if (Path(out) / report.task_id).exists() and not args.force:
+            # never overwrite a package a reviewer may have approved or edited
+            skipped += 1
+            continue
         write_package(TaskDraft.load(draft_path), report, spec, env, out)
         written += 1
     print(f"exported {written} package(s) to {args.out or wd.tasks}"
+          + (f"; {skipped} already there (kept; --force overwrites)" if skipped else "")
           + ("" if args.out else "  (review them with: factory review)"))
-    return 0 if written else 4
+    return 0 if (written or skipped) else 4
 
 
 # =========================================================================== human review
@@ -282,10 +287,17 @@ def cmd_tasks_edit(args, cfg) -> int:
 def cmd_tasks_publish(args, cfg) -> int:
     store = _store_of(args, cfg)
     wanted = [e for e in store.entries() if e.status == "approved" or (args.include_pending and e.status == "pending")]
+    out = Path(args.out)
+    if out.is_dir():
+        # a republish must not leave behind tasks that were deleted or unapproved since the last one
+        keep = {e.task_id for e in wanted}
+        stale = [d for d in sorted(out.iterdir()) if d.is_dir() and d.name not in keep and (d / "task.toml").exists()]
+        for d in stale:
+            shutil.rmtree(d)
+            print(f"removed   {d.name}  (no longer approved)")
     if not wanted:
         print("nothing to publish: no approved tasks (approve with 'factory review' or 'factory tasks approve')")
         return 4
-    out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     for e in wanted:
         if args.format == "harbor":
@@ -391,7 +403,7 @@ def cmd_harness_run(args, cfg) -> int:
         packages = [e.path for e in store.entries() if e.status != "deleted"
                     and (args.status == "all" or e.status == args.status)]
     if args.task:
-        packages = [p for p in packages if any(p.name == t or p.name.startswith(t) for t in args.task)]
+        packages = [p for p in packages if any(t in p.name for t in args.task)]  # same partial IDs as tasks show
     if not packages:
         raise ConfigError("no task packages to run on")
     console = _console()
@@ -414,6 +426,8 @@ def cmd_harness_run(args, cfg) -> int:
         if store is not None and ts.difficulty == "unsolved" and agent.kind == "command":
             store.note(ts.task_id, f"unsolved by {agent.name} in {ts.attempts} attempt(s); check it is solvable")
     console.print(t)
+    if summary.stopped_early:
+        console.print(f"[red]stopped early:[/] {summary.stopped_early}")
     console.print(f"results: {Workdir(cfg.workdir).harness / summary.run_id}")
     return 0
 
@@ -482,6 +496,7 @@ def cmd_tasks_assignments(args, cfg) -> int:
 
 def cmd_harness_work(args, cfg) -> int:
     from .harness.agents import get_agent
+    from .harness.runner import INFRA_CATEGORIES
 
     store = _store_of(args, cfg)
     console = _console()
@@ -512,17 +527,28 @@ def cmd_harness_work(args, cfg) -> int:
                 printer(r)
 
             summary = harness.run([e.path for e in entries], agent, model=model, k=k, on_result=collect)
+            who = f"{agent_name}{' ' + model if model else ''}"
             for e in entries:
                 rs = [r for r in results if r.task_id == e.task_id]
+                if not rs:
+                    console.print(f"  [yellow]not attempted[/] {e.task_id} (run stopped); assignment stays open")
+                    continue
                 ok = [r for r in rs if r.resolved]
+                if not ok and all(r.category in INFRA_CATEGORIES for r in rs):
+                    # a setup/quota problem, not a verdict on the task: keep the assignment open
+                    store.note(e.task_id, f"{who}: {', '.join(sorted({r.category for r in rs}))} in run "
+                                          f"{summary.run_id}; assignment left open, retry with 'factory harness work'")
+                    console.print(f"  [yellow]kept open[/] {e.task_id} (agent error, not a result)")
+                    continue
                 cats = ", ".join(sorted({r.category for r in rs}))
                 text = f"resolved {len(ok)}/{len(rs)}" + ("" if ok else f" ({cats})")
                 branch = next((r.branch for r in ok if r.branch), None)
                 store.record_result(e.task_id, agent_name, model, text, run_id=summary.run_id, branch=branch)
                 if not ok:
-                    store.note(e.task_id, f"unsolved by {agent_name}{' ' + model if model else ''} in {len(rs)} "
-                                          "attempt(s); check it is solvable")
+                    store.note(e.task_id, f"unsolved by {who} in {len(rs)} attempt(s); check it is solvable")
                 resolved_total += bool(ok)
+            if summary.stopped_early:
+                console.print(f"  [red]stopped early:[/] {summary.stopped_early}")
             console.print(f"  resolved@{k}: {summary.resolved_at_k:.0%} · results: "
                           f"{Workdir(cfg.workdir).harness / summary.run_id}")
     finally:

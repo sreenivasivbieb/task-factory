@@ -18,9 +18,8 @@ from pathlib import Path
 from ..config import FactoryConfig
 from ..errors import ConfigError
 from ..models import EnvConfig, GeneratedBy, RepoSpec, TaskDraft, ValidationReport
-from ..packaging.verify import read_package
+from ..packaging.verify import package_repo, read_package
 from ..packaging.writer import write_package
-from ..repo.loader import load_repo
 from ..sandbox.base import SandboxFactory
 from ..validation.drafts import load_draft_dir
 from ..validation.gates import Validator
@@ -67,7 +66,7 @@ Describe the behaviour to add or change. Name the existing modules and functions
 
 TAGS = ["validation rule", "new endpoint or command", "data transformation", "edge-case handling",
         "error handling", "performance or caching", "config or flag", "cross-feature interaction", "bug fix",
-        "refactor with behaviour kept"]
+        "refactor with behaviour kept", "security", "scalability", "api design"]
 
 
 def scaffold_draft(path: Path, title: str, kind: str = "feature", tags: list[str] | None = None,
@@ -109,8 +108,15 @@ def add_task(draft_dir: Path, spec: RepoSpec, env: EnvConfig, factory: SandboxFa
     """Validate a human-written draft; if every gate passes, write it to the store."""
     draft_dir = Path(draft_dir)
     _check_draft(draft_dir)
-    n = len(store.entries()) + 1
+    taken = {e.task_id for e in store.entries()}
+    n = len(taken) + 1
     draft = load_draft_dir(draft_dir, spec, n=n)
+    while draft.task_id in taken:  # never overwrite an existing (or trashed) package
+        if json.loads((draft_dir / "task.json").read_text(encoding="utf-8")).get("task_id"):
+            raise ConfigError(f"{draft.task_id} already exists; to change it use 'factory tasks edit', "
+                              "or remove task_id from task.json to add it as a new task")
+        n += 1
+        draft = load_draft_dir(draft_dir, spec, n=n)
     meta = json.loads((draft_dir / "task.json").read_text(encoding="utf-8"))
     draft.generated_by = GeneratedBy(model="human", author=author or meta.get("author") or store.reviewer)
     report = Validator(factory, spec, env, cfg.gates, log_dir=log_dir).validate(draft)
@@ -153,7 +159,7 @@ def apply_edit(store: TaskStore, task_id: str, draft_dir: Path, reason: str, fac
     old_meta, old_draft = read_package(entry.path)
     env = EnvConfig.load(entry.path / "environment" / "env.json")
     with tempfile.TemporaryDirectory(prefix="factory-edit-") as tmp:
-        spec = load_repo(old_meta.repo, Path(tmp), commit=old_meta.commit_sha)
+        spec = package_repo(entry.path, old_meta, Path(tmp))
         draft = load_draft_dir(Path(draft_dir), spec)
         draft = draft.model_copy(update={
             "task_id": entry.task_id, "idea_id": old_meta.idea_id, "touched_files": draft.touched_files,

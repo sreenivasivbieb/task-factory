@@ -59,6 +59,36 @@ class DockerSandboxFactory(SandboxFactory):
             raise BuildError(f"image build failed for {spec.name}@{spec.short_sha}", r.stdout + r.stderr)
         return ImageRef(tag=tag, backend="docker")
 
+    def pin_image(self, image: str) -> str:
+        """Resolve a tag to its registry digest so a later rebuild uses exactly the same base image."""
+        import json
+
+        if "@sha256:" in image or not self.cfg.pin_base_image:
+            return image
+        inspect = ["image", "inspect", "--format", "{{json .RepoDigests}}", image]
+        r = self._run(inspect)
+        if r.returncode != 0:
+            pulled = self._run(["pull", "-q", image], timeout=self.cfg.build_timeout_s)
+            if pulled.returncode != 0:
+                log.warning("could not pull %s to pin its digest; keeping the tag", image)
+                return image
+            r = self._run(inspect)
+        try:
+            digests = json.loads(r.stdout or "[]") or []
+        except json.JSONDecodeError:
+            digests = []
+        last = image.rsplit("/", 1)[-1]
+        repo = image[: len(image) - len(last)] + last.split(":", 1)[0]
+        match = [d for d in digests if d.split("@")[0] in (repo, f"docker.io/library/{repo}", f"docker.io/{repo}")
+                 or d.split("@")[0].endswith("/" + repo)]
+        chosen = (match or digests or [None])[0]
+        if not chosen or "@" not in chosen:
+            log.warning("%s has no registry digest (a local image?); keeping the tag", image)
+            return image
+        pinned = f"{image}@{chosen.split('@', 1)[1]}"
+        log.info("pinned base image %s", pinned)
+        return pinned
+
     def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
         if not commands:
             return base

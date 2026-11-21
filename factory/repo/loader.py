@@ -145,6 +145,10 @@ def export_clean(spec: RepoSpec, out_dir: Path) -> Path:
 
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    if spec.archive:
+        with tarfile.open(spec.archive) as tf:
+            tf.extractall(out_dir, filter="data")
+        return out_dir
     tar_path = out_dir.parent / f".{out_dir.name}.tar"
     _git(spec.local_path, "archive", "--format=tar", "-o", str(tar_path), spec.commit_sha)
     with tarfile.open(tar_path) as tf:

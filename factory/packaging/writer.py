@@ -11,6 +11,7 @@ module is the only place that knows it)::
       tests/run_tests.sh      copies the tests in and runs them. HIDDEN.
       environment/Dockerfile  rebuilds the sandbox image
       environment/env.json    EnvConfig
+      environment/repo.tar    the pinned commit (git archive), so the package is self-contained
       validation/report.json  gate verdicts; validation/logs/ holds the gate logs
       checksums.txt           SHA-256 of every task file (see docs/decisions.md D23)
 """
@@ -28,7 +29,7 @@ from pathlib import Path
 from ..errors import PackageError
 from ..models import EnvConfig, RepoSpec, TaskDraft, TaskPackage, ValidationReport, ValidationSummary
 from ..runner.test_runner import build_command
-from ..sandbox.base import render_dockerfile
+from ..sandbox.base import git_archive, render_dockerfile
 from . import toml_writer
 
 log = logging.getLogger("factory.packaging")
@@ -40,6 +41,7 @@ TEST_FILES_DIR = "tests/files"
 RUN_SCRIPT = "tests/run_tests.sh"
 DOCKERFILE = "environment/Dockerfile"
 ENV_JSON = "environment/env.json"
+REPO_TAR = "environment/repo.tar"
 REPORT = "validation/report.json"
 LOGS_DIR = "validation/logs"
 CHECKSUMS = "checksums.txt"
@@ -126,6 +128,7 @@ def write_package(draft: TaskDraft, report: ValidationReport, spec: RepoSpec, en
         put(RUN_SCRIPT, _run_script(env, sorted(draft.test_files)))
         put(DOCKERFILE, render_dockerfile(env))
         put(ENV_JSON, env.to_json())
+        git_archive(spec, tmp / REPO_TAR)  # the Dockerfile ADDs it: build with environment/ as the context
         put(REPORT, report.to_json())
         for gate in report.gates:
             for p in gate.exec_log_paths:

@@ -13,7 +13,7 @@ def test_validate_drafts_local(py_repo, tmp_path, capsys):
     code = main(["validate", "--tasks", str(TASKS), "--workdir", str(wd), "--backend", "local"])
     out = capsys.readouterr().out
     assert code == 0
-    assert "1/7 valid" in out
+    assert "1/8 valid" in out
     rejections = [json.loads(line) for line in (wd / "rejections.jsonl").read_text().splitlines()]
-    assert len(rejections) == 6
+    assert len(rejections) == 7
     assert list((wd / "runs").glob("*/report.json"))

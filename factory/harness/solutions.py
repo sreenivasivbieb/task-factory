@@ -47,27 +47,61 @@ class SolutionRepos:
             raise SolutionRepoError(f"git {args[0]} failed in {repo}: {r.stderr.strip()[:500]}")
         return r
 
-    def repo_for(self, meta: TaskPackage) -> Path:
+    def _has_commit(self, repo: Path, ref: str) -> bool:
+        return self._git(repo, "cat-file", "-e", f"{ref}^{{commit}}", check=False).returncode == 0
+
+    def repo_for(self, meta: TaskPackage, archive: Path | None = None) -> tuple[Path, str]:
+        """The solutions repo for ``meta`` and the ref of the task's starting commit in it.
+
+        Normally a clone of the original repo (the starting commit keeps its real SHA).
+        When the original is not reachable, the repo is built from the package's
+        repo.tar instead and the starting commit is tagged ``base/<sha>``.
+        """
         path = self.root / slugify(meta.repo_name, 40)
+        tag = f"base/{meta.commit_sha}"
         if not (path / ".git").exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             r = subprocess.run(["git", "clone", "-q", meta.repo, str(path)], capture_output=True, text=True)
             if r.returncode != 0:
-                raise SolutionRepoError(f"cannot clone {meta.repo}: {r.stderr.strip()[:500]}")
-        if self._git(path, "cat-file", "-e", f"{meta.commit_sha}^{{commit}}", check=False).returncode != 0:
-            self._git(path, "fetch", "-q", "origin")
-        return path
+                if archive is None or not Path(archive).is_file():
+                    raise SolutionRepoError(f"cannot clone {meta.repo}: {r.stderr.strip()[:500]}")
+                path.mkdir(parents=True, exist_ok=True)
+                self._git(path, "init", "-q")
+        if self._has_commit(path, meta.commit_sha):
+            return path, meta.commit_sha
+        if self._has_commit(path, tag):
+            return path, tag
+        if self._git(path, "remote", check=False).stdout.strip():
+            self._git(path, "fetch", "-q", "origin", check=False)
+            if self._has_commit(path, meta.commit_sha):
+                return path, meta.commit_sha
+        if archive is None or not Path(archive).is_file():
+            raise SolutionRepoError(f"commit {meta.commit_sha} not found in {meta.repo}")
+        self._import_archive(path, Path(archive), tag, meta)
+        return path, tag
+
+    def _import_archive(self, repo: Path, archive: Path, tag: str, meta: TaskPackage) -> None:
+        import tarfile
+
+        self._git(repo, "checkout", "-q", "--orphan", f"import/{meta.commit_sha[:12]}")
+        self._git(repo, "rm", "-rfq", "--ignore-unmatch", ".", check=False)
+        self._git(repo, "clean", "-fdqx")
+        with tarfile.open(archive) as tf:
+            tf.extractall(repo, filter="data")
+        self._git(repo, "add", "-A")
+        self._git(repo, "commit", "-q", "--allow-empty", "-m", f"{meta.repo_name} at {meta.commit_sha} (from repo.tar)")
+        self._git(repo, "tag", tag)
 
     def record(self, meta: TaskPackage, diff: str, *, agent: str, model: str | None, attempt: int,
-               run_id: str, f2p: str, p2p: str, title: str) -> tuple[str, str]:
+               run_id: str, f2p: str, p2p: str, title: str, archive: Path | None = None) -> tuple[str, str]:
         """Commit ``diff`` on top of the task's base commit; return (branch, commit SHA)."""
-        repo = self.repo_for(meta)
+        repo, base_ref = self.repo_for(meta, archive)
         base = branch_name(agent, model, meta.task_id)
         branch, n = base, 1
         while self._git(repo, "rev-parse", "--verify", "-q", f"refs/heads/{branch}", check=False).returncode == 0:
             n += 1
             branch = f"{base}-{n}"
-        self._git(repo, "checkout", "-q", "--detach", "-f", meta.commit_sha)
+        self._git(repo, "checkout", "-q", "--detach", "-f", base_ref)
         self._git(repo, "clean", "-fdq")
         with tempfile.NamedTemporaryFile("w", suffix=".diff", delete=False, encoding="utf-8") as fh:
             fh.write(diff if diff.endswith("\n") else diff + "\n")
@@ -88,6 +122,6 @@ class SolutionRepos:
         self._git(repo, "commit", "-q", "-m", message)
         sha = self._git(repo, "rev-parse", "HEAD").stdout.strip()
         self._git(repo, "branch", branch, sha)
-        self._git(repo, "checkout", "-q", "--detach", meta.commit_sha)
+        self._git(repo, "checkout", "-q", "--detach", base_ref)
         log.info("new branch %s at %s in %s", branch, sha[:12], repo)
         return branch, sha

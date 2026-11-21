@@ -23,6 +23,7 @@ class SandboxConfig(_Section):
     build_timeout_s: int = 1800
     output_limit_bytes: int = 1_000_000
     local_run_setup: bool = False  # local backend: run setup commands on the host (off by default)
+    pin_base_image: bool = True  # inspect records the base image by digest (name:tag@sha256:...)
 
 
 class GatesConfig(_Section):

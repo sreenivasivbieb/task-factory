@@ -129,8 +129,8 @@ def test_docker_agent_has_network_grader_does_not(docker_factory, docker_package
 
 
 @pytest.mark.docker
-@pytest.mark.parametrize("solve,reward", [(True, "1"), (False, "0")])
-def test_harbor_task_runs_like_harbor(docker_package, tmp_path, solve, reward):
+@pytest.mark.parametrize("mode,reward", [("solve", "1"), ("nothing", "0"), ("cheat", "0"), ("solve+cheat", "1")])
+def test_harbor_task_runs_like_harbor(docker_package, tmp_path, mode, reward):
     """Build the exported Harbor task and run solve.sh + test.sh with Harbor's mounts (/solution, /tests)."""
     task = to_harbor(docker_package, tmp_path / "harbor")
     tag = f"factory-harbor-test:{task.name[-20:]}".lower()
@@ -138,7 +138,10 @@ def test_harbor_task_runs_like_harbor(docker_package, tmp_path, solve, reward):
                    capture_output=True)
     logs = tmp_path / "logs"
     logs.mkdir()
-    script = ("bash /solution/solve.sh && " if solve else "") + "bash /tests/test.sh"
+    from test_hardening import CHEAT_CMD
+
+    script = ("bash /solution/solve.sh && " if "solve" in mode else "") + \
+             (f"cd /repo && {CHEAT_CMD} && " if "cheat" in mode else "") + "bash /tests/test.sh"
     r = subprocess.run(["docker", "run", "--rm", "--network", "none",
                         "-v", f"{task / 'solution'}:/solution:ro", "-v", f"{task / 'tests'}:/tests:ro",
                         "-v", f"{logs}:/logs/verifier", tag, "bash", "-c", script],

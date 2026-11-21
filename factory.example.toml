@@ -8,6 +8,7 @@ docker_binary = "docker"  # or "podman"
 memory = "2g"
 cpus = 2.0
 pids_limit = 512
+pin_base_image = true     # inspect records the base image by digest (name:tag@sha256:...)
 
 [gates]
 stability_repeats = 1     # use 3 for final runs

@@ -25,8 +25,7 @@ from pydantic import Field
 from ..config import FactoryConfig
 from ..errors import ConfigError
 from ..models import EnvConfig, Model, RepoSpec, TaskPackage
-from ..packaging.verify import read_package
-from ..repo.loader import load_repo
+from ..packaging.verify import package_repo, read_package
 from ..runner.test_runner import run_tests
 from ..sandbox.base import BASE_TAG, SCRATCH_DIR, Sandbox, SandboxFactory
 from .agents import AgentSpec
@@ -37,6 +36,13 @@ log = logging.getLogger("factory.harness")
 INSTRUCTION_PATH = f"{SCRATCH_DIR}/instruction.md"
 Category = str  # resolved | wrong_behaviour | regression | build_error | no_change | agent_error | timeout
 #                  | patch_apply_fail | leak
+
+# Outcomes that say nothing about the model's skill (setup, quota or harness problems). They do not
+# count as "unsolved", and `harness work` keeps the assignment open so the next run retries it.
+INFRA_CATEGORIES = {"agent_error", "leak"}
+# Stop a run after this many agent errors in a row (an exhausted quota or a wrong model ID fails
+# every task the same way; continuing only burns time).
+MAX_CONSECUTIVE_AGENT_ERRORS = 2
 
 
 class AttemptResult(Model):
@@ -65,7 +71,7 @@ class TaskScore(Model):
     task_id: str
     attempts: int
     resolved: int
-    difficulty: str  # easy (all attempts) | medium (some) | unsolved (none)
+    difficulty: str  # easy (all attempts) | medium (some) | unsolved (none) | error (only infra failures)
 
 
 class HarnessSummary(Model):
@@ -80,6 +86,7 @@ class HarnessSummary(Model):
     total_cost_usd: float | None = None
     per_task: list[TaskScore] = Field(default_factory=list)
     categories: dict[str, int] = Field(default_factory=dict)
+    stopped_early: str | None = None  # why the run stopped before every task was attempted
 
 
 def _usage(stdout: str) -> tuple[float | None, int | None]:
@@ -132,11 +139,10 @@ class Harness:
     def close(self) -> None:
         self._tmp.cleanup()
 
-    def _spec(self, meta: TaskPackage) -> RepoSpec:
+    def _spec(self, meta: TaskPackage, pkg: Path) -> RepoSpec:
         key = (meta.repo, meta.commit_sha)
         if key not in self._specs:
-            self._specs[key] = load_repo(meta.repo, Path(self._tmp.name) / str(len(self._specs)),
-                                         commit=meta.commit_sha)
+            self._specs[key] = package_repo(pkg, meta, Path(self._tmp.name) / str(len(self._specs)))
         return self._specs[key]
 
     def run(self, packages: list[Path], agent: AgentSpec, *, model: str | None = None, k: int = 1,
@@ -155,10 +161,13 @@ class Harness:
         run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{agent.name}"
         run_dir = self.out_dir / run_id
         results: list[AttemptResult] = []
+        consecutive_errors, stopped = 0, None
         for pkg in packages:
+            if stopped:
+                break
             meta, draft = read_package(pkg)
             env = EnvConfig.load(Path(pkg) / "environment" / "env.json")
-            spec = self._spec(meta)
+            spec = self._spec(meta, Path(pkg))
             base = self.factory.build_image(spec, env)
             agent_image = self.factory.build_derived_image(base, agent.name, agent.install)
             for attempt in range(1, k + 1):
@@ -167,18 +176,26 @@ class Harness:
                 res = self._attempt(meta, draft, env, base, agent_image, agent, model, attempt, adir, auth)
                 if res.resolved and self.solutions is not None and agent.kind == "command":
                     clean = (adir / "solution.diff").read_text(encoding="utf-8")
+                    tar = Path(pkg) / "environment" / "repo.tar"
                     res.branch, res.commit = self.solutions.record(
                         meta, clean, agent=agent.name, model=res.model, attempt=attempt, run_id=run_id,
                         f2p=f"{res.f2p_passed}/{res.f2p_total}",
                         p2p=f"{len(meta.pass_to_pass) - len(res.p2p_failed)}/{len(meta.pass_to_pass)}",
-                        title=_title(draft.requirements_md, meta.task_id))
+                        title=_title(draft.requirements_md, meta.task_id), archive=tar if tar.is_file() else None)
                 res.save(adir / "grade.json")
                 with (run_dir / "results.jsonl").open("a", encoding="utf-8") as fh:
                     fh.write(res.model_dump_json() + "\n")
                 results.append(res)
                 if on_result:
                     on_result(res)
+                consecutive_errors = consecutive_errors + 1 if res.category == "agent_error" else 0
+                if consecutive_errors >= MAX_CONSECUTIVE_AGENT_ERRORS:
+                    stopped = (f"{consecutive_errors} agent errors in a row (quota, API key or model ID?); "
+                               f"see {adir / 'agent.log.json'}")
+                    log.warning("stopping the run: %s", stopped)
+                    break
         summary = summarize(run_id, agent.name, model, k, results)
+        summary.stopped_early = stopped
         summary.save(run_dir / "summary.json")
         return summary
 
@@ -299,7 +316,10 @@ def summarize(run_id: str, agent: str, model: str | None, k: int, results: list[
     per_task = []
     for task_id, rs in by_task.items():
         n = sum(r.resolved for r in rs)
-        difficulty = "easy" if n == len(rs) else ("medium" if n else "unsolved")
+        if not n and all(r.category in INFRA_CATEGORIES for r in rs):
+            difficulty = "error"  # the model never really tried: not evidence that the task is hard
+        else:
+            difficulty = "easy" if n == len(rs) else ("medium" if n else "unsolved")
         per_task.append(TaskScore(task_id=task_id, attempts=len(rs), resolved=n, difficulty=difficulty))
     categories: dict[str, int] = {}
     for r in results:

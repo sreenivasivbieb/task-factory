@@ -9,6 +9,7 @@ opinion is involved anywhere.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import time
@@ -17,6 +18,7 @@ from pathlib import Path
 
 from ..config import GatesConfig
 from ..models import EnvConfig, GateResult, ImageRef, RejectCode, RepoSpec, RunSummary, TaskDraft, ValidationReport
+from ..harness.protect import protected_in_patch
 from ..runner.test_runner import flaky_ids, run_tests
 from ..sandbox.base import Sandbox, SandboxFactory
 from .mutations import make_mutants
@@ -89,7 +91,10 @@ class Validator:
             return self._baseline
         cache_file = None
         if self.cache_dir is not None:
-            cache_file = self.cache_dir / "baseline" / (self.image.tag.replace("/", "_").replace(":", "_") + ".json")
+            # keyed by image AND test settings: a changed test command must not reuse an old baseline
+            env_key = hashlib.sha256(self.env.to_json().encode()).hexdigest()[:12]
+            name = self.image.tag.replace("/", "_").replace(":", "_") + f"-{env_key}.json"
+            cache_file = self.cache_dir / "baseline" / name
         if cache_file is not None and cache_file.exists():
             summary = RunSummary.load(cache_file)
         else:
@@ -124,6 +129,12 @@ class Validator:
     def _gate_g1(self, draft: TaskDraft) -> GateResult:
         if not draft.solution_patch.strip():
             raise _Reject(RejectCode.PATCH_APPLY_FAIL, "reference patch is empty")
+        protected = protected_in_patch(draft.solution_patch)
+        if protected:
+            # the grader restores these before grading, so no solver could reproduce this solution
+            raise _Reject(RejectCode.SOLUTION_TOUCHES_PROTECTED,
+                          f"reference patch changes test or test-config files: {_names(protected)}; "
+                          "put test changes in the hidden tests instead")
         with self._sandbox() as sb:
             r = sb.apply_patch(draft.solution_patch)
         if not r.ok:
@@ -192,6 +203,8 @@ class Validator:
         run, caught = 1, 1
         notes = ["empty: caught (G3)"]
         mutants = make_mutants(draft.solution_patch, draft.test_files, self.cfg.mutations)
+        if not mutants:
+            notes.append("no code mutant could be made from this patch, so only the empty control ran")
         for m in mutants:
             with self._sandbox() as sb:
                 if not sb.apply_patch(m.patch).ok:

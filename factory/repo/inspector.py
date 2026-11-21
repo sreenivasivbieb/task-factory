@@ -161,6 +161,9 @@ def smoke_check(spec: RepoSpec, result: InspectResult, factory: SandboxFactory) 
     """Build the image and run the full test suite once. Records the baseline."""
     if result.env is None:
         return result
+    pinned = factory.pin_image(result.env.base_image)
+    if pinned != result.env.base_image:
+        result = result.model_copy(update={"env": result.env.model_copy(update={"base_image": pinned})})
     try:
         image = factory.build_image(spec, result.env)
     except BuildError as exc:

@@ -298,7 +298,7 @@ Two rules give stable identities:
   and number always give the same ID.
 - **Reject codes** are a fixed enum: `BASELINE_FAIL`, `PATCH_APPLY_FAIL`,
   `FEATURE_TESTS_FAIL_WITH_PATCH`, `FEATURE_TESTS_PASS_WITHOUT_PATCH`,
-  `REGRESSION`, `FLAKY`, `NEG_CONTROL_PASSED`.
+  `REGRESSION`, `FLAKY`, `NEG_CONTROL_PASSED`, `SOLUTION_TOUCHES_PROTECTED`.
 
 ## 6. Sandbox: isolated, repeatable execution
 
@@ -455,7 +455,7 @@ sequenceDiagram
 | Gate | Patch applied | Tests run | Passes when | Reject code |
 | --- | --- | --- | --- | --- |
 | **G0** Baseline | none | full existing suite | it runs, something passes, and failing tests ≤ 20% (they become `known_failures` and are ignored later) | `BASELINE_FAIL` |
-| **G1** Patch applies | reference | none | `git apply --check` succeeds and the patch is not empty | `PATCH_APPLY_FAIL` |
+| **G1** Patch applies | reference | none | the patch is not empty, changes no protected file (tests or test/build config, see §13), and `git apply --check` succeeds | `PATCH_APPLY_FAIL`, `SOLUTION_TOUCHES_PROTECTED` |
 | **G2** Feature passes | reference | the task's test files | every *new* test ID passes; at least one exists | `FEATURE_TESTS_FAIL_WITH_PATCH` |
 | **G3** Feature fails without patch | none | the task's test files | every new test fails; tests that pass are named in the reason | `FEATURE_TESTS_PASS_WITHOUT_PATCH` |
 | **G4** Regression | reference | full suite + new tests | every test that passed at baseline still passes, and the new tests pass inside the full suite too | `REGRESSION` |
@@ -474,6 +474,35 @@ Details that matter:
   so tests that depend on state left by an earlier run are caught too.
 - **Running the same task twice gives the same verdict, codes and test lists.**
   A test checks this.
+- **The reference solution may not change protected files.** The grader undoes
+  every solver change to tests and test/build config (§13). A reference patch
+  that edits `tests/conftest.py` would therefore be impossible for any solver to
+  match; such test changes belong in the hidden test files, which are written
+  after the restore.
+- **The baseline cache key includes the test settings** (test command, timeout,
+  report format), not only the image, so changing the test command reruns G0.
+- **G6 says when no code mutant could be made** (for example a patch that only
+  adds a data structure). The task then passes on G3 alone, and the report says
+  so instead of showing a misleading "1/1 caught".
+
+### What kinds of tasks fit
+
+A task fits when its behaviour can be checked by an automated test that fails
+before the change and passes after it. Checked on toyshop with one hand-written
+task per area (all seven gates, 10 stability repeats, all six mutation operators;
+an AI model solved the security task):
+
+| Area | Fits | Example that passed every gate | Does not fit |
+| --- | --- | --- | --- |
+| Security | flaws a test can demonstrate: injection, input validation, path traversal, authorization checks, secrets kept out of logs | receipt line injection through product names + SKU allowlist | anything needing a network or live service (sandboxes are offline); a test proves one attack is blocked, not that the code is secure |
+| Scalability | algorithmic cost inside one process | a tag index so `by_tag` costs the same on 100k products as on 1k; measured as a **ratio** of timings, not absolute time, so it holds on any machine | distributed scale (load balancers, sharding, many machines): one container, 2 CPUs |
+| Design | code and API design that shows in behaviour: new extension points, interfaces, error rules | pluggable coupon rules (`register_coupon`) | a pure refactor (behaviour unchanged, so G3 must fail); architecture documents and visual UI design (need a rubric or judge, not built) |
+
+Two rules shape such tasks. Every hidden test must fail without the change
+(G3), so "guard" assertions that already pass go inside a failing test, not in a
+test of their own. Timing-based tests need correctness assertions too, because
+the mutation operators rarely find anything to mutate in a pure performance
+change.
 
 ### Cost per task
 
@@ -539,8 +568,9 @@ toyshop-a471ba4-bulk-discount-on-cart-lines-007/
 │   ├── files/tests/test_bulk_discount.py   hidden feature tests at their repo paths
 │   └── run_tests.sh          copies the tests into a working copy and runs them
 ├── environment/
-│   ├── Dockerfile            rebuilds the exact sandbox image
-│   └── env.json              EnvConfig
+│   ├── Dockerfile            rebuilds the exact sandbox image (docker build environment/)
+│   ├── env.json              EnvConfig
+│   └── repo.tar              the pinned commit (git archive): the package is self-contained
 ├── validation/
 │   ├── report.json           every gate with its details
 │   └── logs/G0.json …        raw command, exit code, output, parsed results
@@ -562,7 +592,7 @@ pass_to_pass = ["tests/test_cart.py::test_add_and_quantity", "…"]   # 28 tests
 manual_edit = false
 
 [environment]
-base_image = "python:3.11-slim"
+base_image = "python:3.11-slim@sha256:07d4824036af…"   # pinned by digest at inspect time
 framework = "pytest"
 
 [validation]
@@ -579,7 +609,7 @@ flowchart LR
         W1[valid report only] --> W2[build in a temp folder] --> W3[compute checksums] --> W4[rename into place]
     end
     subgraph verify["verify_package"]
-        V1[check checksums] --> V2[read task.toml + files] --> V3[reload repo at commit_sha] --> V4[rebuild image from env.json] --> V5[run all gates again] --> V6[compare fail_to_pass and pass_to_pass]
+        V1[check checksums] --> V2[read task.toml + files] --> V3[repo from repo.tar] --> V4[rebuild image from env.json] --> V5[run all gates again] --> V6[compare fail_to_pass and pass_to_pass]
     end
     write --> PKG[(package)] --> verify
 ```
@@ -590,6 +620,11 @@ flowchart LR
 - `checksums.txt` covers the task files (instruction, `task.toml`, solution,
   tests, environment). It leaves out `validation/`, because logs contain
   timings that differ on every run and would break "same seed, same checksums".
+- **A package is self-contained.** `environment/repo.tar` holds the pinned
+  commit, so `docker build environment/` works on any machine, and re-verifying,
+  editing, Harbor export and the harness all read the repo from it. The original
+  repo does not have to exist any more (older packages without `repo.tar` fall
+  back to it). For toyshop the archive is 30 KB.
 - The package layout lives in `packaging/writer.py` only. When the organizers
   publish their template, that one module changes.
 
@@ -675,6 +710,12 @@ tasks and writes `review_summary.json` beside them: counts per status, every
 deletion with its reason and reviewer, every human-authored task, and every
 manual edit with its reason. That file is the disclosure the organizers ask for.
 
+Publishing again into the same folder removes task folders that are no longer
+approved (deleted or unapproved since the last publish), so a submission folder
+never keeps a task a reviewer threw out. In the other direction, `factory
+export` never overwrites a package that is already in the store (a reviewer may
+have approved or edited it); `--force` does.
+
 ## 13. Coding harness
 
 The harness runs an AI coding agent on task packages and scores it with the
@@ -697,7 +738,7 @@ sequenceDiagram
     A-->>H: git diff against the factory-base tag
     F-->>G: fresh container from the task image
     H->>G: apply the agent's diff
-    H->>G: restore existing test files the agent changed
+    H->>G: undo agent changes to protected files (restore changed, remove added)
     H->>G: write hidden tests, run feature tests + full suite
     G-->>H: per-test results
     H->>H: resolved? category? save grade.json
@@ -713,10 +754,18 @@ Design choices:
   solution are absent before the agent starts.
 - **`factory-base` tag.** Every image tags its starting commit, so the diff is
   correct even if the agent makes its own commits.
-- **Tests are protected.** Before grading, tracked test files and test config
-  (`tests/`, `test_*.py`, `*_test.go`, `*.test.js`, `conftest.py`, `src/test/`, …)
-  that the agent changed are restored to the starting version, and the attempt
-  lists them in `tests_tampered`.
+- **Grading cannot be faked.** Before grading, every agent change to a
+  *protected* file is undone: changed or deleted ones are restored, added ones
+  are removed. Protected means test files (`tests/`, `test_*.py`, `*_test.go`,
+  `*.test.js`, `src/test/`, …) and files that control how tests are collected or
+  run: `conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml`,
+  `package.json`, jest/vitest/mocha config, `sitecustomize.py`, `*.pth`, `go.mod`,
+  `Cargo.toml`, `pom.xml`, Gradle files. The attempt lists them in
+  `tests_tampered`. Without this, a six-line `conftest.py` that reports every
+  test as passed "resolved" a task with no implementation at all (found in
+  review and now covered by tests, including a real Harbor container).
+  Restoring build files is safe because dependencies are installed when the
+  image is built, never during grading.
 - **Real agents run only in Docker.** The local backend has no isolation, so the
   harness refuses to run agent presets there; `oracle`, `noop` and `command`
   are allowed for tests.
@@ -741,12 +790,20 @@ sequenceDiagram
     end
     W->>L: result (resolved n/k, category, run id, branch)
     W->>L: note "unsolved by …" when no attempt passed
+    W->>L: note "agent_error …, left open" when the model never really ran
 ```
 
 An assignment is an `assign` event in the review log with the agent and model.
 It stays open until a `result` (written by the worker) or an `unassign`.
 Assigning never changes a task's review status, and a deleted task cannot be
-assigned. `factory tasks assignments --all` shows every assignment with its
+assigned.
+
+Not every failure is a result. When every attempt ended in `agent_error` (an
+exhausted free quota, a wrong model ID, a missing key) or `leak`, the worker
+leaves the assignment **open** and adds a note instead of an "unsolved" verdict,
+so the next `factory harness work` retries it. A run also **stops early** after
+two agent errors in a row, because a quota or ID problem fails every remaining
+task the same way; the tasks it did not reach stay open. `factory tasks assignments --all` shows every assignment with its
 result and branch.
 
 ### Passing solutions become git nodes
@@ -836,7 +893,9 @@ mini-swe-agent.
 The run summary gives **resolved@k** (tasks solved in at least one of k
 attempts), pass rate over all attempts, mean agent time, total cost when the
 agent reports it, and a difficulty per task: `easy` (all attempts), `medium`
-(some) or `unsolved` (none). Unsolved tasks get a note in the review log.
+(some), `unsolved` (none) or `error` (every attempt was an agent error, so the
+model never really tried). Unsolved tasks get a note in the review log; `error`
+tasks do not.
 
 The `oracle` and `noop` agents are the harness's own sanity checks: on a valid
 task set the oracle must resolve 100% and `noop` 0%. Both are covered by tests.
@@ -854,12 +913,13 @@ the one this project's packages were modelled on. `factory tasks publish
 | `task.toml` | Harbor schema: `[metadata]` (task id, title, category, language, repo URL, base commit, tags, author), `[verifier]`, `[agent]`, `[environment]` |
 | `environment/Dockerfile` + `repo.tar` | the same generated Dockerfile as our sandbox, with the pinned repo archive beside it |
 | `solution/solve.sh` | `git apply /solution/solution.diff` (Harbor's oracle agent runs it) |
-| `tests/test.sh` | restores protected tests, copies `/tests/files/` into the repo, runs the full suite, writes `1` or `0` to `/logs/verifier/reward.txt` |
+| `tests/test.sh` | undoes agent changes to protected files, copies `/tests/files/` into the repo, runs the hidden feature tests and checks that every one of them ran and passed (for JUnit reports: test-case count, no failure, error or skip), then runs the full suite, and writes `1` or `0` to `/logs/verifier/reward.txt` |
 
 This was checked with the real Harbor CLI on an exported task: `harbor run -p
 DIR -a oracle` scored **1.000** and `-a nop` scored **0.000**. A Docker-based test
 in our suite runs the same `solve.sh` and `test.sh` with Harbor's mounts on
-every test run.
+every test run, with four cases: solved (reward 1), nothing done (0), only a
+cheating `conftest.py` (0), and a real solution plus a cheating `conftest.py` (1).
 
 ## 15. Life of a task
 
@@ -894,7 +954,7 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 | Source of variation | How it is pinned |
 | --- | --- |
 | Repo content | full commit SHA; synthetic history uses a fixed author and date |
-| Environment | image tag = hash of commit, base image, setup commands and prelude version |
+| Environment | base image pinned by digest at inspect time (`sandbox.pin_base_image`); image tag = hash of commit, base image, setup commands and prelude version |
 | Runtime | fixed `TZ`, `LANG`, `PYTHONHASHSEED`; no network |
 | Test identity | stable string IDs from machine-readable reports |
 | Task identity | deterministic `task_id` from repo, commit, title and number |
@@ -903,7 +963,7 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 
 ## 17. How it is tested
 
-There are 134 tests. Unit tests use two small fixture repositories that are rich
+There are 153 tests. Unit tests use two small fixture repositories that are rich
 enough to show real failure modes:
 
 | Fixture | Contents |
@@ -918,6 +978,13 @@ presses, edits that are re-validated or refused), human-authored tasks, the
 harness (oracle 100%, noop 0%, a wrong agent graded `wrong_behaviour`, an agent
 that edits an existing test to hide a regression is still caught, hidden files
 absent from the agent sandbox), and the Harbor export run with Harbor's mounts.
+`tests/test_hardening.py` covers what the review in round 4 found: a cheating
+`conftest.py` (and `pytest.ini`, deleted tests, weakened tests, `pyproject.toml`
+options) is undone before grading; a reference patch that edits a test file is
+rejected; agent errors stop a run and keep assignments open; a package still
+works after the original repo is deleted (harness and git branch both use
+`repo.tar`); export never overwrites a reviewed package; a republish removes
+deleted tasks; the baseline cache follows the test settings; and digest pinning.
 
 ```mermaid
 flowchart LR
@@ -929,6 +996,7 @@ flowchart LR
         B4[also breaks money format] --> R4[REGRESSION]
         B5[test depends on leftover state] --> R5[FLAKY]
         B6[tests skip the boundary] --> R6[NEG_CONTROL_PASSED]
+        B7[reference also edits conftest.py] --> R7[SOLUTION_TOUCHES_PROTECTED]
     end
 ```
 

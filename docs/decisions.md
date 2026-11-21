@@ -111,6 +111,37 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
 - **D41 Custom agents may run on the local backend** (they are the user's own commands, e.g. in
   tests); built-in presets that install third-party agents are refused there.
 
+- **D42 Grading undoes every change to protected files** (review round 4, 2026-11-21). Found by
+  running a "cheating agent": a six-line root `conftest.py` that marks every test passed got a task
+  `resolved` with no implementation. Protected now = test paths + test/build config
+  (`conftest.py`, `pytest.ini`, `tox.ini`, `setup.cfg`, `pyproject.toml`, `package.json`,
+  jest/vitest/mocha config, `sitecustomize.py`, `*.pth`, `go.mod`, `Cargo.toml`, `pom.xml`, Gradle).
+  Changed or deleted ones are restored, added ones removed, in the harness and the Harbor verifier
+  alike. Safe because dependencies are installed at image build time, never while grading.
+- **D43 The reference solution may not touch protected files** (new reject code
+  `SOLUTION_TOUCHES_PROTECTED`, gate G1): otherwise the grader's restore would make the task
+  unsolvable. Test helpers go in the hidden test files, which are written after the restore.
+- **D44 The Harbor verifier checks that the hidden tests ran**: it runs the feature test files
+  first and, for JUnit reports, requires at least `len(fail_to_pass)` test cases with no failure,
+  error or skip, before the full-suite exit code decides the reward.
+- **D45 Packages carry `environment/repo.tar`** (user decision): self-contained, offline, buildable
+  with `docker build environment/`. `package_repo()` reads it for verify, edit, Harbor export and
+  the harness; the solutions repo falls back to it (tag `base/<sha>`) when the original repo is gone.
+- **D46 Base images are pinned by digest at inspect time** (user decision; `sandbox.pin_base_image`,
+  default on). `python:3.11-slim` becomes `python:3.11-slim@sha256:…`, so a rebuild months later
+  uses the same base. Images without a registry digest keep their tag, with a warning.
+- **D47 Agent errors are not results**: when every attempt is `agent_error`/`leak` the worker keeps
+  the assignment open and notes it (no "unsolved" note); difficulty is `error`. A run stops after
+  two agent errors in a row (an exhausted quota fails every task alike). Seen live: OpenCode's free
+  quota returned HTTP 429 and earlier runs wrongly closed the assignments as unsolved.
+- **D48 The workflow never discards a human decision**: `export` skips packages already in the store
+  (`--force` overwrites); `tasks publish` removes task folders that are no longer approved; `tasks
+  add` picks the next free task number and refuses a draft whose `task_id` already exists.
+- **D49 Smaller fixes**: the baseline cache key includes the test settings; G6 says when no code
+  mutant could be made; `--task` accepts the same partial IDs as `tasks show`; planned commands
+  (`ideas`, `generate`, `report`, `run`) are labelled with their milestone in `--help`; tags
+  `security`, `scalability` and `api design` were added.
+
 ## Limitations
 
 - L1 LocalSandbox has no isolation and allows network; it logs a warning on every use.
@@ -120,11 +151,12 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   e.g. swapping the arguments of a symmetric function) survives and rejects a good task. The
   operator set is configurable (`gates.mutations`) and every survivor is named in the report.
 - L4 `gates.task_timeout_s` is not enforced yet; each test run has its own timeout.
-- L5 The Harbor verifier's reward is the full-suite exit code. Known baseline failures are
-  deselected for pytest only; for other frameworks a repo with known failures would score 0.
-- L6 Test protection restores tracked test files and `conftest.py`; an agent could still change
-  other test configuration (for example `pyproject.toml` pytest options). The grade records
-  which test files were restored.
+- L5 Known baseline failures are deselected in the Harbor verifier for pytest only; for other
+  frameworks a repo with known failures would score 0. The "every hidden test ran" check (D44)
+  needs JUnit reports; for Jest JSON, go test and cargo the verifier relies on exit codes.
+- L6 Grading protection (D42) covers files that are known to steer test runs. A determined agent
+  could still special-case the tests from inside source code (for example detect pytest and
+  return canned answers); hidden tests, mutation controls and human review are the defence there.
 - L7 Agent presets other than `oracle`, `noop` and `command` have not been run with real API
   keys in this environment; their command lines follow each tool's documentation.
 - L8 Test protection cannot tell a harmless edit (an agent adding its own tests to an existing
@@ -132,3 +164,14 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   `tests_tampered`.
 - L9 AWS Bedrock Qwen is configured but not run here (no AWS credentials on this machine); the
   OpenCode path itself was verified with an OpenCode Zen free model.
+- L10 Every hidden test must fail without the change (G3), so a task cannot ship separate
+  "guard" tests that already pass (e.g. "the old behaviour still works"); such assertions go
+  inside a failing test. Existing tests already act as guards (pass_to_pass).
+- L11 Performance tasks rely on timing ratios; G5 repeats catch flaky ones, but a heavily loaded
+  machine can still make them fail. Mutation operators rarely apply to a pure data-structure
+  change, so such tasks need correctness assertions in the timing test.
+- L12 Ideas mined from the repo (TODO/FIXME, `NotImplementedError` stubs, skipped tests, bug-fix
+  commits, stale TODOs) are planned (M7, plus a history miner for bug fixes) but not built yet;
+  today tasks are written by people.
+- L13 A task can only depend on what the base image has: dependencies are installed at build
+  time, and the grader restores build files, so a task that needs a new dependency cannot pass.

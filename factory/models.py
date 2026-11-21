@@ -52,6 +52,9 @@ class RepoSpec(Model):
     local_path: str
     language: str | None = None
     synthetic_history: bool = False
+    # A tar of the pinned commit (e.g. a package's environment/repo.tar). When set, images and
+    # clean copies are made from it, so the original repo does not need to be reachable.
+    archive: str | None = None
 
     @field_validator("commit_sha")
     @classmethod
@@ -214,6 +217,7 @@ class RejectCode(str, Enum):
     REGRESSION = "REGRESSION"
     FLAKY = "FLAKY"
     NEG_CONTROL_PASSED = "NEG_CONTROL_PASSED"
+    SOLUTION_TOUCHES_PROTECTED = "SOLUTION_TOUCHES_PROTECTED"
 
 
 class GateResult(Model):

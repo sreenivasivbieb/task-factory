@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `134 tests` · `Harbor-compatible`
+`Python 3.11+` · `Docker` · `153 tests` · `Harbor-compatible`
 
 </div>
 
@@ -67,7 +67,7 @@ fresh container. The first gate that fails rejects the task, with an exact code.
 flowchart TD
     D[Task draft] --> G0
     G0["G0 · Baseline<br/>the original repo's tests pass"] -->|ok| G1
-    G1["G1 · Patch applies<br/>reference diff applies cleanly"] -->|ok| G2
+    G1["G1 · Patch applies<br/>reference diff applies cleanly,<br/>touches no test or test-config file"] -->|ok| G2
     G2["G2 · Feature works<br/>new tests pass WITH the patch"] -->|ok| G3
     G3["G3 · Tests need the feature<br/>new tests fail WITHOUT the patch"] -->|ok| G4
     G4["G4 · No regressions<br/>every old test still passes"] -->|ok| G6
@@ -75,7 +75,7 @@ flowchart TD
     G5["G5 · Stable<br/>same result when repeated"] -->|ok| OK(["VALID → exported"])
 
     G0 -->|fail| R0[BASELINE_FAIL]
-    G1 -->|fail| R1[PATCH_APPLY_FAIL]
+    G1 -->|fail| R1["PATCH_APPLY_FAIL /<br/>SOLUTION_TOUCHES_PROTECTED"]
     G2 -->|fail| R2[FEATURE_TESTS_FAIL_WITH_PATCH]
     G3 -->|fail| R3[FEATURE_TESTS_PASS_WITHOUT_PATCH]
     G4 -->|fail| R4[REGRESSION]
@@ -95,6 +95,16 @@ the old code tests nothing. G6 goes further. It breaks the reference patch on
 purpose (flips `>=` to `>`, deletes an error branch, hard-codes the expected
 value…) and demands that the hidden tests notice. If a wrong patch still passes,
 the tests are too weak and the task is rejected.
+
+**Which areas fit?** Anything whose behaviour a test can check. One task per area
+was written for the toy repo and passed every gate with 10 repeats and all six
+mutation operators: a **security** fix (receipt line injection + a SKU
+allowlist; an AI model solved it), a **scalability** change (a tag index whose
+cost stays flat from 1k to 100k products, measured as a timing ratio so it holds
+on any machine) and an **API design** task (pluggable coupon rules). Out of
+reach: things that need a live network or many machines, pure refactors (G3
+needs a failing test) and visual or architecture design (needs a judge, not a
+test). Details in [design §9](docs/design.md#what-kinds-of-tasks-fit).
 
 ## A real example, end to end
 
@@ -158,9 +168,10 @@ rejected  FLAKY                              toyshop-a471ba4-bulk-discount-flaky
 rejected  FEATURE_TESTS_PASS_WITHOUT_PATCH   toyshop-a471ba4-bulk-discount-tests-check-old-be-003
 rejected  PATCH_APPLY_FAIL                   toyshop-a471ba4-bulk-discount-stale-patch-004
 rejected  REGRESSION                         toyshop-a471ba4-bulk-discount-breaks-money-forma-005
-rejected  NEG_CONTROL_PASSED                 toyshop-a471ba4-bulk-discount-weak-tests-006
-valid                                        toyshop-a471ba4-bulk-discount-on-cart-lines-007
-1/7 valid
+rejected  SOLUTION_TOUCHES_PROTECTED         toyshop-a471ba4-bulk-discount-reference-also-edi-006
+rejected  NEG_CONTROL_PASSED                 toyshop-a471ba4-bulk-discount-weak-tests-007
+valid                                        toyshop-a471ba4-bulk-discount-on-cart-lines-008
+1/8 valid
 ```
 
 The same set exists for a Node.js repo (`textkit`), with the same results.
@@ -175,7 +186,7 @@ flowchart LR
         B["task.toml"]
         C["solution/solution.diff"]
         D["tests/files/… + run_tests.sh"]
-        E["environment/Dockerfile + env.json"]
+        E["environment/Dockerfile + env.json + repo.tar"]
         F["validation/report.json + logs/"]
         G["checksums.txt"]
     end
@@ -197,13 +208,13 @@ flowchart LR
 | `task.toml` | Repo, pinned commit, test IDs (`fail_to_pass`, `pass_to_pass`), tags, validation summary | judge |
 | `solution/solution.diff` | Reference implementation | hidden |
 | `tests/` | Hidden feature tests and a script that runs them | hidden |
-| `environment/` | Dockerfile and config to rebuild the exact sandbox | judge |
+| `environment/` | Dockerfile, config and `repo.tar` (the pinned commit): `docker build environment/` rebuilds the exact sandbox on any machine, base image pinned by digest | judge |
 | `validation/` | Gate-by-gate report and the raw logs of every run | reviewer |
 | `checksums.txt` | SHA-256 of every task file; one changed byte fails verification | reviewer |
 
 `factory validate --tasks <package>` rebuilds everything from these files and
 runs all gates again, so the evidence can be checked by someone who never saw
-the original run.
+the original run, and without access to the original repo.
 
 ## Human in the loop
 
@@ -277,7 +288,7 @@ flowchart LR
     A["factory tasks assign TASK<br/>--model nvidia/… · tokenrouter/… ·<br/>opencode/… · amazon-bedrock/qwen…"] --> W["factory harness work"]
     W --> S1["Agent sandbox<br/>base commit + all deps installed<br/>+ agent CLI · network on"]
     S1 -->|"instruction.md only"| M(["LLM implements<br/>the task"])
-    M -->|"its diff"| S2["Grading sandbox<br/>fresh · network off<br/>restore tests · add hidden tests"]
+    M -->|"its diff"| S2["Grading sandbox<br/>fresh · network off<br/>undo test/config changes · add hidden tests"]
     S2 --> Q{"all hidden +<br/>existing tests pass?"}
     Q -- yes --> N[("new git node<br/>branch ai/AGENT-MODEL/TASK")]
     Q -- no --> F["result recorded<br/>task flagged for review"]
@@ -373,10 +384,20 @@ difficulty per task: *easy* (every attempt solved it), *medium* (some) or
 *unsolved*. An unsolved task gets a note in the review log, because it may be
 unsolvable and deserves a human look.
 
+A failure of the *setup* is not a verdict on the task. If every attempt ends in
+`agent_error` (an exhausted free quota, a wrong model ID, a missing key), the
+task's difficulty is *error*, no "unsolved" note is written, and `harness work`
+leaves the assignment open to retry. A run stops after two agent errors in a
+row instead of failing every remaining task the same way.
+
 **Cheating is blocked.** The agent's sandbox never contains the hidden tests or
 the reference solution (checked before the agent starts). API keys never
-appear on a command line or in logs. Existing tests the agent edits or deletes
-are put back before grading.
+appear on a command line or in logs. Before grading, every change the agent made
+to tests or to files that steer the test run (`conftest.py`, `pytest.ini`,
+`pyproject.toml`, `package.json`, jest/vitest config, …) is undone: edited and
+deleted files are restored, new ones removed. A review found that a six-line
+`conftest.py` marking every test "passed" used to count as a solution; it is now
+caught by our harness and by the Harbor verifier, and tests keep it that way.
 
 ### Harbor compatibility
 
@@ -385,7 +406,8 @@ Terminal-Bench team) is a popular framework for running agents on tasks.
 `factory tasks publish --format harbor` writes each task in Harbor's layout
 (`environment/` with the pinned repo, `solution/solve.sh`, `tests/test.sh`
 writing `/logs/verifier/reward.txt`), so the same tasks run on Harbor's built-in
-agents too. Checked with the real Harbor CLI:
+agents too. The verifier gives reward 1 only when every hidden test actually ran
+and passed and the full suite passes. Checked with the real Harbor CLI:
 
 ```text
 $ harbor run -p submission/ -a oracle        $ harbor run -p submission/ -a nop
@@ -399,7 +421,7 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works
 ```sh
 git clone https://github.com/sreenivasivbieb/task-factory && cd task-factory
 uv sync
-uv run pytest                      # 134 tests; Docker tests skip with a message if Docker is missing
+uv run pytest                      # 153 tests; Docker tests skip with a message if Docker is missing
 ```
 
 Run the whole flow on the bundled toy repo:
@@ -410,7 +432,7 @@ git -C /tmp/toyshop init -q && git -C /tmp/toyshop add -A && git -C /tmp/toyshop
 
 uv run factory load --repo /tmp/toyshop            # copy and pin the repo
 uv run factory inspect                             # detect env, build image, run baseline (28 passed)
-uv run factory validate --tasks tests/fixtures/tasks/python   # 1/7 valid, 6 rejected with exact codes
+uv run factory validate --tasks tests/fixtures/tasks/python   # 1/8 valid, 7 rejected with exact codes
 uv run factory export                              # valid tasks go to workdir/tasks as pending
 uv run factory review                              # approve or delete them, one by one
 uv run factory tasks publish --out submission/     # only approved tasks
@@ -425,12 +447,12 @@ uv run factory harness run --agent oracle          # harness sanity check: 100% 
 | `factory load --repo SRC [--commit SHA]` | Copy and pin the repo; writes `repo_spec.json` | ✅ |
 | `factory inspect` | Detect environment, build image, run baseline; writes `env_config.json` | ✅ |
 | `factory validate --tasks DIR` | Run the gates on task drafts or re-verify packages | ✅ |
-| `factory export` | Write every valid task into the task store as `pending` | ✅ |
+| `factory export` | Write every valid task into the task store as `pending` (never overwrites a package already there; `--force` does) | ✅ |
 | `factory tasks list · show · approve · delete · restore · edit · new · add · publish · summary` | Human review and authoring | ✅ |
 | `factory review` | Interactive review, one task at a time | ✅ |
 | `factory tasks assign · unassign · assignments` | Assign tasks to a test model | ✅ |
 | `factory harness agents · run · work` (alias `factory bench`) | Run AI coding agents on tasks, score them, branch passing solutions | ✅ |
-| `factory ideas` · `generate` · `report` · `run` | Feature source, LLM generation, evidence report, one-shot pipeline | 🔜 M6–M10 |
+| `factory ideas` · `generate` · `report` · `run` | Ideas mined from the repo (TODO/FIXME, stubs, skipped tests, bug-fix history), LLM generation, evidence report, one-shot pipeline | 🔜 M6–M10 (labelled "planned" in `--help`) |
 
 Flags on every command: `--workdir`, `--config`, `--seed`, `--force`, `--dry-run`,
 `--verbose`, `--backend docker|local`. Each step saves JSON under `workdir/` and

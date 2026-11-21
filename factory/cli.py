@@ -57,11 +57,11 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("inspect", help="detect environment, build image, run baseline")
     _common(p)
 
-    p = sub.add_parser("ideas", help="run the feature source; writes ideas.json")
+    p = sub.add_parser("ideas", help="(planned, M7) mine ideas from TODOs, history, docs; writes ideas.json")
     p.add_argument("--limit", type=int, default=30)
     _common(p)
 
-    p = sub.add_parser("generate", help="generate and validate tasks")
+    p = sub.add_parser("generate", help="(planned, M6) generate tasks with an LLM and validate them")
     p.add_argument("--count", type=int, default=10)
     _common(p)
 
@@ -74,10 +74,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", type=Path, default=None, help="folder (default: the task store)")
     _common(p)
 
-    p = sub.add_parser("report", help="build the evidence report")
+    p = sub.add_parser("report", help="(planned, M9) build the evidence report")
     _common(p)
 
-    p = sub.add_parser("run", help="all steps in order")
+    p = sub.add_parser("run", help="(planned, M10) all steps in order")
     p.add_argument("--repo", required=True)
     p.add_argument("--count", type=int, default=10)
     _common(p)

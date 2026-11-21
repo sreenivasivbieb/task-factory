@@ -14,11 +14,11 @@ from pathlib import Path
 
 from ..config import FactoryConfig
 from ..errors import PackageError
-from ..models import EnvConfig, TaskDraft, TaskPackage, ValidationReport
+from ..models import EnvConfig, RepoSpec, TaskDraft, TaskPackage, ValidationReport
 from ..repo.loader import load_repo
 from ..sandbox.base import SandboxFactory
 from ..validation.gates import Validator
-from .writer import CHECKSUMS, ENV_JSON, INSTRUCTION, SOLUTION, TASK_TOML, TEST_FILES_DIR, compute_checksums
+from .writer import CHECKSUMS, ENV_JSON, INSTRUCTION, REPO_TAR, SOLUTION, TASK_TOML, TEST_FILES_DIR, compute_checksums
 
 log = logging.getLogger("factory.packaging")
 
@@ -57,6 +57,19 @@ def read_package(pkg_dir: Path) -> tuple[TaskPackage, TaskDraft]:
     return meta, draft
 
 
+def package_repo(pkg_dir: Path, meta: TaskPackage, tmp: Path) -> RepoSpec:
+    """The task's repo at its pinned commit: from the package's repo.tar, else from the original source.
+
+    Packages written before repo.tar existed (or copied without it) fall back to
+    loading ``meta.repo``, which must then still be reachable.
+    """
+    tar = Path(pkg_dir) / REPO_TAR
+    if tar.is_file():
+        return RepoSpec(name=meta.repo_name, source=meta.repo, commit_sha=meta.commit_sha,
+                        local_path=str(tar.parent), language=meta.language, archive=str(tar.resolve()))
+    return load_repo(meta.repo, Path(tmp), commit=meta.commit_sha)
+
+
 def verify_package(pkg_dir: Path, factory: SandboxFactory, cfg: FactoryConfig | None = None,
                    log_dir: Path | None = None) -> ValidationReport:
     """Rebuild the environment from the package and run the gates again.
@@ -73,7 +86,7 @@ def verify_package(pkg_dir: Path, factory: SandboxFactory, cfg: FactoryConfig | 
     if env != meta.environment:
         raise PackageError(f"{pkg_dir.name}: {ENV_JSON} and task.toml disagree on the environment")
     with tempfile.TemporaryDirectory(prefix="factory-verify-") as tmp:
-        spec = load_repo(meta.repo, Path(tmp), commit=meta.commit_sha)
+        spec = package_repo(pkg_dir, meta, Path(tmp))
         if spec.commit_sha != meta.commit_sha:
             raise PackageError(f"{pkg_dir.name}: repo resolved to {spec.commit_sha}, package pins {meta.commit_sha}")
         report = Validator(factory, spec, env, cfg.gates, log_dir=log_dir).validate(draft)
