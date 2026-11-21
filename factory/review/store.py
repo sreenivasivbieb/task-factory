@@ -10,6 +10,11 @@ Layout::
 Status of a task = the effect of its latest event:
 ``add`` / ``restore`` / ``edit`` -> pending, ``approve`` -> approved, ``delete`` -> deleted.
 A package with no events is pending. Only approved tasks are published.
+
+Assignments (``assign`` / ``unassign`` / ``result``) do not change the status: they
+record which agent + model should attempt a task, and what happened when it did.
+An assignment is open until a ``result`` or ``unassign`` event for the same
+task, agent and model.
 """
 
 from __future__ import annotations
@@ -30,7 +35,7 @@ from ..errors import ConfigError, PackageError
 from ..models import Model, TaskPackage
 
 Status = Literal["pending", "approved", "deleted"]
-Action = Literal["add", "approve", "delete", "restore", "edit", "note"]
+Action = Literal["add", "approve", "delete", "restore", "edit", "note", "assign", "unassign", "result"]
 
 _STATUS_AFTER: dict[str, Status] = {"add": "pending", "restore": "pending", "edit": "pending",
                                     "approve": "approved", "delete": "deleted"}
@@ -45,6 +50,29 @@ class ReviewEvent(Model):
     action: Action
     reviewer: str
     reason: str | None = None
+    agent: str | None = None
+    model: str | None = None
+    run_id: str | None = None
+    branch: str | None = None
+
+
+@dataclass
+class Assignment:
+    task_id: str
+    agent: str
+    model: str | None
+    assigned_by: str
+    ts: float
+    note: str | None
+    result: "ReviewEvent | None" = None
+
+    @property
+    def open(self) -> bool:
+        return self.result is None
+
+    @property
+    def label(self) -> str:
+        return f"{self.agent}:{self.model}" if self.model else self.agent
 
 
 def default_reviewer() -> str:
@@ -115,8 +143,8 @@ class TaskStore:
                 out.append(ReviewEvent.model_validate_json(line))
         return out
 
-    def record(self, task_id: str, action: Action, reason: str | None = None) -> ReviewEvent:
-        event = ReviewEvent(task_id=task_id, action=action, reviewer=self.reviewer, reason=reason)
+    def record(self, task_id: str, action: Action, reason: str | None = None, **extra) -> ReviewEvent:
+        event = ReviewEvent(task_id=task_id, action=action, reviewer=self.reviewer, reason=reason, **extra)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         with self.log_path.open("a", encoding="utf-8") as fh:
             fh.write(event.model_dump_json() + "\n")
@@ -196,6 +224,44 @@ class TaskStore:
 
     def note(self, task_id: str, text: str) -> None:
         self.record(self.get(task_id).task_id, "note", text)
+
+    # ------------------------------------------------------------------ assignments
+
+    def assign(self, task_id: str, agent: str, model: str | None, note: str | None = None) -> Assignment:
+        entry = self.get(task_id)
+        if entry.status == "deleted":
+            raise ConfigError(f"{entry.task_id} is deleted; restore it before assigning")
+        for a in self.assignments():
+            if a.task_id == entry.task_id and a.agent == agent and a.model == model:
+                return a  # already open
+        self.record(entry.task_id, "assign", note, agent=agent, model=model)
+        return next(a for a in self.assignments() if a.task_id == entry.task_id and a.agent == agent
+                    and a.model == model)
+
+    def unassign(self, task_id: str, agent: str | None = None, model: str | None = None) -> int:
+        tid = self.get(task_id).task_id
+        closed = 0
+        for a in self.assignments():
+            if a.task_id == tid and (agent is None or a.agent == agent) and (model is None or a.model == model):
+                self.record(tid, "unassign", agent=a.agent, model=a.model)
+                closed += 1
+        return closed
+
+    def record_result(self, task_id: str, agent: str, model: str | None, summary: str,
+                      run_id: str | None = None, branch: str | None = None) -> ReviewEvent:
+        return self.record(task_id, "result", summary, agent=agent, model=model, run_id=run_id, branch=branch)
+
+    def assignments(self, open_only: bool = True) -> list[Assignment]:
+        """Assignments in the order they were made; open ones only unless ``open_only=False``."""
+        out: list[Assignment] = []
+        for e in self.events():
+            if e.action == "assign":
+                out.append(Assignment(e.task_id, e.agent or "", e.model, e.reviewer, e.ts, e.reason))
+            elif e.action in ("result", "unassign"):
+                for a in out:
+                    if a.task_id == e.task_id and a.agent == e.agent and a.model == e.model and a.open:
+                        a.result = e
+        return [a for a in out if a.open] if open_only else out
 
     def summary(self) -> dict:
         """Counts plus every human deletion with its reason (for the report and the submission)."""

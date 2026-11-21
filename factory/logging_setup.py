@@ -24,6 +24,20 @@ class _JsonlFormatter(logging.Formatter):
         return json.dumps(entry, default=str)
 
 
+class _CurrentStderrHandler(logging.StreamHandler):
+    """Writes to whatever ``sys.stderr`` is now (survives test capture and redirection)."""
+
+    @property
+    def stream(self):
+        import sys
+
+        return sys.stderr
+
+    @stream.setter
+    def stream(self, _value) -> None:
+        pass
+
+
 def setup_logging(workdir: Path, verbose: bool = False) -> Path:
     """Attach a JSONL file handler and a console handler to the ``factory`` logger."""
     log_dir = Path(workdir) / "logs"
@@ -35,7 +49,7 @@ def setup_logging(workdir: Path, verbose: bool = False) -> Path:
     fh = logging.FileHandler(log_path, encoding="utf-8")
     fh.setFormatter(_JsonlFormatter())
     fh.setLevel(logging.DEBUG)
-    ch = logging.StreamHandler()
+    ch = _CurrentStderrHandler()
     ch.setFormatter(logging.Formatter("%(levelname)-7s %(message)s"))
     ch.setLevel(logging.DEBUG if verbose else logging.INFO)
     root.addHandler(fh)

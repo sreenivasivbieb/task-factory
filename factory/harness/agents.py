@@ -26,6 +26,11 @@ from ..errors import ConfigError
 
 _ENSURE_NODE = ("command -v npm >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq "
                 "--no-install-recommends nodejs npm ca-certificates && rm -rf /var/lib/apt/lists/*)")
+# OpenCode v2 ships as @opencode/cli (the older "opencode-ai" package is v1 and lacks --standalone).
+OPENCODE_VERSION = "2.3.2"
+
+_BEDROCK = ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_REGION", "AWS_REGION_NAME",
+            "AWS_BEARER_TOKEN_BEDROCK"]
 _ENSURE_PIP = ("command -v pip >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq "
                "--no-install-recommends python3-pip && rm -rf /var/lib/apt/lists/*)")
 
@@ -50,6 +55,10 @@ class AgentSpec(BaseModel):
     timeout_s: int = 1800
     homepage: str = ""
     experimental: bool = False
+    # Optional: copy the user's own login for this agent into the sandbox (opt-in, --use-host-auth).
+    # Only the entry for the model's provider ("nvidia" in "nvidia/...") is copied.
+    host_auth_file: str | None = None
+    sandbox_auth_file: str | None = None
 
     def command(self, instruction_file: str, model: str | None) -> str:
         model = model or self.default_model
@@ -82,12 +91,25 @@ BUILTIN: dict[str, AgentSpec] = {
             "--message-file {instruction_file} {model_args}",
         model_flag="--model {model}", secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY"],
         experimental=True, homepage="https://github.com/Aider-AI/aider"),
+    "opencode": AgentSpec(
+        description="OpenCode CLI (opencode run --auto). Any OpenCode provider: nvidia/..., tokenrouter/..., "
+                    "opencode/... (Zen), amazon-bedrock/qwen... ",
+        install=[_ENSURE_NODE, f"npm install -g @opencode/cli@{OPENCODE_VERSION}"],
+        run='opencode run --auto --standalone --format json {model_args} "$(cat {instruction_file})"',
+        model_flag="-m {model}",
+        secrets=["NVIDIA_API_KEY", "TOKENROUTER_API_KEY", "OPENCODE_API_KEY", "OPENROUTER_API_KEY", *_BEDROCK],
+        host_auth_file="~/.local/share/opencode/auth.json",
+        sandbox_auth_file="/home/factory/.local/share/opencode/auth.json",
+        experimental=True, homepage="https://github.com/sst/opencode"),
     "mini-swe-agent": AgentSpec(
-        description="mini-swe-agent from the SWE-agent team (mini -y --exit-immediately).",
+        description="mini-swe-agent from the SWE-agent team (mini -y --exit-immediately); LiteLLM models such as "
+                    "bedrock/qwen.qwen3-coder-480b-a35b-v1:0 or nvidia_nim/...",
         install=[_ENSURE_PIP, _pip("mini-swe-agent")],
-        run='mini -t "$(cat {instruction_file})" -y --exit-immediately {model_args}',
-        model_flag="-m {model}", secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY"],
-        env={"MSWEA_CONFIGURED": "true"}, experimental=True,
+        run='mini -t "$(cat {instruction_file})" -y --exit-immediately -l 0 {model_args}',
+        model_flag="-m {model}",
+        secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "NVIDIA_NIM_API_KEY", "OPENROUTER_API_KEY",
+                 *_BEDROCK],
+        env={"MSWEA_CONFIGURED": "true", "MSWEA_COST_TRACKING": "ignore_errors"}, experimental=True,
         homepage="https://github.com/SWE-agent/mini-swe-agent"),
 }
 

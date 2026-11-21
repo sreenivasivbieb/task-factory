@@ -35,7 +35,8 @@ from .protect import RESTORE_SH
 log = logging.getLogger("factory.harness")
 
 INSTRUCTION_PATH = f"{SCRATCH_DIR}/instruction.md"
-Category = str  # resolved | wrong_behaviour | regression | build_error | no_change | timeout | patch_apply_fail | leak
+Category = str  # resolved | wrong_behaviour | regression | build_error | no_change | agent_error | timeout
+#                  | patch_apply_fail | leak
 
 
 class AttemptResult(Model):
@@ -56,6 +57,8 @@ class AttemptResult(Model):
     diff_lines: int = 0
     cost_usd: float | None = None
     tokens: int | None = None
+    branch: str | None = None  # new git branch holding the passing solution (resolved attempts only)
+    commit: str | None = None
 
 
 class TaskScore(Model):
@@ -96,11 +99,33 @@ def _usage(stdout: str) -> tuple[float | None, int | None]:
     return None, None
 
 
+def host_auth_payload(agent: AgentSpec, model: str | None) -> bytes:
+    """The user's stored login for the model's provider only (e.g. ``nvidia`` from ``nvidia/...``)."""
+    if not agent.host_auth_file or not agent.sandbox_auth_file:
+        raise ConfigError(f"agent '{agent.name}' has no host login file to use")
+    path = Path(os.path.expanduser(agent.host_auth_file))
+    if not path.exists():
+        raise ConfigError(f"{path} not found; log in with the agent first (for OpenCode: opencode auth login)")
+    provider = (model or agent.default_model or "").split("/", 1)[0]
+    if not provider:
+        raise ConfigError("--model provider/model is needed to pick the stored login")
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ConfigError(f"{path} is not valid JSON") from exc
+    if provider not in data:
+        raise ConfigError(f"no stored login for provider '{provider}' in {path}; stored: {', '.join(sorted(data))}")
+    return json.dumps({provider: data[provider]}).encode("utf-8")
+
+
 class Harness:
-    def __init__(self, factory: SandboxFactory, cfg: FactoryConfig, out_dir: Path) -> None:
+    def __init__(self, factory: SandboxFactory, cfg: FactoryConfig, out_dir: Path, *,
+                 use_host_auth: bool = False, solutions=None) -> None:
         self.factory = factory
         self.cfg = cfg
         self.out_dir = Path(out_dir)
+        self.use_host_auth = use_host_auth
+        self.solutions = solutions  # SolutionRepos or None
         self._specs: dict[tuple[str, str], RepoSpec] = {}
         self._tmp = tempfile.TemporaryDirectory(prefix="factory-harness-")
 
@@ -118,10 +143,13 @@ class Harness:
             on_result=None) -> HarnessSummary:
         from ..sandbox.local_backend import LocalSandboxFactory
 
-        if isinstance(self.factory, LocalSandboxFactory) and agent.kind == "command" and agent.name != "command":
+        from .agents import BUILTIN
+
+        if isinstance(self.factory, LocalSandboxFactory) and agent.kind == "command" and agent.name in BUILTIN:
             raise ConfigError(f"agent '{agent.name}' must run in Docker (the local backend has no isolation)")
+        auth = host_auth_payload(agent, model) if (self.use_host_auth and agent.host_auth_file) else None
         missing = [s for s in agent.secrets if not os.environ.get(s)]
-        if agent.secrets and len(missing) == len(agent.secrets):
+        if auth is None and agent.secrets and len(missing) == len(agent.secrets):
             raise ConfigError(f"agent '{agent.name}' needs one of these environment variables: "
                               f"{', '.join(agent.secrets)}")
         run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{agent.name}"
@@ -136,7 +164,14 @@ class Harness:
             for attempt in range(1, k + 1):
                 adir = run_dir / meta.task_id / f"attempt-{attempt}"
                 adir.mkdir(parents=True, exist_ok=True)
-                res = self._attempt(meta, draft, env, base, agent_image, agent, model, attempt, adir)
+                res = self._attempt(meta, draft, env, base, agent_image, agent, model, attempt, adir, auth)
+                if res.resolved and self.solutions is not None and agent.kind == "command":
+                    clean = (adir / "solution.diff").read_text(encoding="utf-8")
+                    res.branch, res.commit = self.solutions.record(
+                        meta, clean, agent=agent.name, model=res.model, attempt=attempt, run_id=run_id,
+                        f2p=f"{res.f2p_passed}/{res.f2p_total}",
+                        p2p=f"{len(meta.pass_to_pass) - len(res.p2p_failed)}/{len(meta.pass_to_pass)}",
+                        title=_title(draft.requirements_md, meta.task_id))
                 res.save(adir / "grade.json")
                 with (run_dir / "results.jsonl").open("a", encoding="utf-8") as fh:
                     fh.write(res.model_dump_json() + "\n")
@@ -150,7 +185,7 @@ class Harness:
     # ------------------------------------------------------------------ one attempt
 
     def _attempt(self, meta, draft, env: EnvConfig, base, agent_image, agent: AgentSpec, model, attempt,
-                 adir: Path) -> AttemptResult:
+                 adir: Path, auth: bytes | None = None) -> AttemptResult:
         res = AttemptResult(task_id=meta.task_id, agent=agent.name, model=model or agent.default_model,
                             attempt=attempt, resolved=False, category="no_change", f2p_total=len(meta.fail_to_pass))
         # ---- 1+2: agent works in its own sandbox; hidden files are never there
@@ -166,6 +201,10 @@ class Harness:
             elif agent.kind == "noop":
                 out = sb.exec(["true"], timeout_s=10)
             else:
+                if auth is not None:
+                    # the user's login for this provider only; the container is removed after the attempt
+                    sb.write_file(agent.sandbox_auth_file, auth)
+                    sb.exec(["chmod", "600", agent.sandbox_auth_file], timeout_s=10)
                 sb.write_file(INSTRUCTION_PATH, draft.requirements_md)
                 secrets = {s: os.environ[s] for s in agent.secrets if os.environ.get(s)}
                 out = sb.exec(["sh", "-c", agent.command(INSTRUCTION_PATH, model)], timeout_s=agent.timeout_s,
@@ -185,7 +224,12 @@ class Harness:
         if res.agent_timed_out:
             res.category = "timeout"
         if not diff.strip():
-            res.category = "timeout" if res.agent_timed_out else "no_change"
+            if res.agent_timed_out:
+                res.category = "timeout"
+            elif res.agent_exit_code not in (0, None):
+                res.category = "agent_error"  # e.g. bad model ID or API key: see agent.log.json
+            else:
+                res.category = "no_change"
             return res
         # ---- 3: grade in a fresh, offline sandbox
         start = time.monotonic()
@@ -197,6 +241,13 @@ class Harness:
             sb.exec(["sh", "-c", f"mkdir -p {SCRATCH_DIR}"], timeout_s=10)
             restored = sb.exec(["sh", "-c", RESTORE_SH], timeout_s=120)
             res.tests_tampered = [ln for ln in restored.stdout.splitlines() if ln.strip()]
+            # the exact change that is graded: the agent's diff minus restored test files
+            sb.exec(["sh", "-c", f"git add -A && git diff --cached --binary {BASE_TAG} > {SCRATCH_DIR}/clean.diff "
+                                 "&& git reset -q"], timeout_s=120)
+            try:
+                (adir / "solution.diff").write_bytes(sb.read_file(f"{SCRATCH_DIR}/clean.diff"))
+            except FileNotFoundError:
+                (adir / "solution.diff").write_text("", encoding="utf-8")
             for path, content in draft.test_files.items():
                 sb.write_file(path, content)
             feature = run_tests(sb, env, sorted(draft.test_files), log_to=adir / "grade-feature.json")
@@ -232,6 +283,13 @@ class Harness:
             except FileNotFoundError:
                 continue
         return leaked
+
+
+def _title(instruction: str, fallback: str) -> str:
+    for line in instruction.splitlines():
+        if line.startswith("# "):
+            return line[2:].strip()
+    return fallback
 
 
 def summarize(run_id: str, agent: str, model: str | None, k: int, results: list[AttemptResult]) -> HarnessSummary:

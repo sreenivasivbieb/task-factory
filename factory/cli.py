@@ -8,8 +8,9 @@ Command groups::
 
     factory load | inspect | validate | export | ideas | generate | report | run
     factory tasks   list | show | approve | delete | restore | new | add | edit | publish | summary
+                    assign | unassign | assignments
     factory review  (interactive)
-    factory harness agents | run        (factory bench = factory harness run)
+    factory harness agents | run | work   (factory bench = factory harness run)
 """
 
 from __future__ import annotations
@@ -146,6 +147,26 @@ def build_parser() -> argparse.ArgumentParser:
     _store(p)
     _common(p)
 
+    p = tsub.add_parser("assign", help="assign tasks to a test model (run them with: factory harness work)")
+    p.add_argument("task_ids", nargs="+")
+    p.add_argument("--agent", default=None, help="agent (default: harness.default_agent = opencode)")
+    p.add_argument("--model", default=None, help="model, e.g. nvidia/..., tokenrouter/..., amazon-bedrock/qwen...")
+    p.add_argument("--note", default=None)
+    _store(p)
+    _common(p)
+
+    p = tsub.add_parser("unassign", help="cancel open assignments")
+    p.add_argument("task_ids", nargs="+")
+    p.add_argument("--agent", default=None)
+    p.add_argument("--model", default=None)
+    _store(p)
+    _common(p)
+
+    p = tsub.add_parser("assignments", help="list assignments (open by default)")
+    p.add_argument("--all", action="store_true", help="include finished ones with their result")
+    _store(p)
+    _common(p)
+
     p = sub.add_parser("review", help="interactive review: approve or delete tasks one by one")
     p.add_argument("--status", choices=["pending", "approved", "all"], default="pending")
     _store(p)
@@ -158,6 +179,14 @@ def build_parser() -> argparse.ArgumentParser:
     _common(p)
     p = hsub.add_parser("run", help="run an agent on tasks")
     _harness_run_args(p)
+    p = hsub.add_parser("work", help="run every open assignment, record results, branch passing solutions")
+    p.add_argument("--k", type=int, default=None, help="attempts per task (default: harness.k = 1)")
+    p.add_argument("--timeout", type=int, default=None, help="agent timeout in seconds")
+    p.add_argument("--use-host-auth", action="store_true",
+                   help="copy your stored agent login (e.g. OpenCode auth.json, that provider only) into the sandbox")
+    p.add_argument("--no-branch", action="store_true", help="do not create git branches for passing solutions")
+    _store(p)
+    _common(p)
 
     p = sub.add_parser("bench", help="alias of 'harness run'")
     _harness_run_args(p)
@@ -165,8 +194,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _harness_run_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--agent", required=True, help="oracle, noop, claude-code, codex, aider, mini-swe-agent, "
-                                                  "command, or one from [harness.agents]")
+    p.add_argument("--agent", required=True, help="oracle, noop, opencode, claude-code, codex, aider, "
+                                                  "mini-swe-agent, command, or one from [harness.agents]")
     p.add_argument("--solver", dest="agent", help=argparse.SUPPRESS)
     p.add_argument("--model", default=None)
     p.add_argument("--k", type=int, default=None, help="attempts per task (default: harness.k = 1)")
@@ -176,6 +205,9 @@ def _harness_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--status", choices=["approved", "pending", "all"], default="all",
                    help="which tasks from the store (default: all not deleted)")
     p.add_argument("--timeout", type=int, default=None, help="agent timeout in seconds")
+    p.add_argument("--use-host-auth", action="store_true",
+                   help="copy your stored agent login (e.g. OpenCode auth.json, that provider only) into the sandbox")
+    p.add_argument("--no-branch", action="store_true", help="do not create git branches for passing solutions")
     _store(p)
     _common(p)
 

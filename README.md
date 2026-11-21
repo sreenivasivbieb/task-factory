@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `127 tests` · `Harbor-compatible`
+`Python 3.11+` · `Docker` · `134 tests` · `Harbor-compatible`
 
 </div>
 
@@ -56,7 +56,7 @@ flowchart LR
 4. **Validate** runs seven gates in fresh, network-less containers. A task passes only if every gate passes, including the ones you write yourself.
 5. **Review**: a person looks at every valid task and approves or deletes it. Deletions need a reason and are disclosed.
 6. **Publish** only the approved tasks, in our format or in [Harbor](https://github.com/laude-institute/harbor)'s format.
-7. **Harness**: run AI coding agents (Claude Code, Codex, Aider, mini-swe-agent, or any command) on the tasks and score them with the hidden tests.
+7. **Harness**: assign tasks to a test model (OpenCode with NVIDIA, TokenRouter, OpenCode Zen or AWS Bedrock Qwen; Claude Code; Codex; Aider; mini-swe-agent; or any command). It solves them in a sandbox, the hidden tests grade it, and every passing solution becomes a new git branch.
 
 ## What makes a task "valid"
 
@@ -266,54 +266,117 @@ through all seven gates like any other and is marked `human (your name)`.
 ## Coding harness
 
 The harness answers the question the tasks exist for: *how well does this
-agent do?* It runs an agent on each task and scores it with the hidden tests,
-without ever letting the agent see them.
+model do?* You assign a task to a test model; a worker gives the model a fresh
+sandbox at the repo's base commit with every package requirement already
+installed, lets it implement the task, then runs the hidden tests. **If every
+test passes, the model's solution becomes a new git node**: a commit on its own
+branch.
 
 ```mermaid
-sequenceDiagram
-    participant H as factory harness run
-    participant A as Agent sandbox<br/>(network on)
-    participant G as Grading sandbox<br/>(network off)
-    H->>A: fresh container at the starting commit + agent installed
-    H->>A: instruction.md only (no tests, no solution)
-    A->>A: agent edits the repo (Claude Code, Codex, Aider, …)
-    A-->>H: the agent's diff
-    H->>G: fresh container, apply the agent's diff
-    H->>G: put back any existing test the agent changed
-    H->>G: copy in the hidden tests, run them
-    G-->>H: resolved? · category · per-test results
+flowchart LR
+    A["factory tasks assign TASK<br/>--model nvidia/… · tokenrouter/… ·<br/>opencode/… · amazon-bedrock/qwen…"] --> W["factory harness work"]
+    W --> S1["Agent sandbox<br/>base commit + all deps installed<br/>+ agent CLI · network on"]
+    S1 -->|"instruction.md only"| M(["LLM implements<br/>the task"])
+    M -->|"its diff"| S2["Grading sandbox<br/>fresh · network off<br/>restore tests · add hidden tests"]
+    S2 --> Q{"all hidden +<br/>existing tests pass?"}
+    Q -- yes --> N[("new git node<br/>branch ai/AGENT-MODEL/TASK")]
+    Q -- no --> F["result recorded<br/>task flagged for review"]
+
+    classDef good fill:#dcfce7,stroke:#16a34a,color:#14532d;
+    classDef bad fill:#fef2f2,stroke:#ef4444,color:#7f1d1d;
+    class N good;
+    class F bad;
 ```
+
+### Assign a task to a test model and run it
+
+```sh
+factory tasks assign TASK_ID --agent opencode --model opencode/deepseek-v4.1-flash-free
+factory tasks assignments                    # what is waiting
+factory harness work --use-host-auth         # run every open assignment
+factory tasks assignments --all              # results, with the branch of each passing solution
+git -C workdir/solutions/toyshop log --oneline --all
+```
+
+A real run on the toy task, with a free model through OpenCode:
+
+```text
+$ factory harness work --use-host-auth
+opencode · opencode/deepseek-v4.1-flash-free: 1 task(s), k=1
+  resolved         toyshop-a471ba4-bulk-discount-on-cart-lines-007 (attempt 1, agent 27.75s)
+      new branch ai/opencode-deepseek-v4-1-flash-free/toyshop-a471ba4-bulk-discount-on-cart-lines-007 @ 5c7b3ce3f7f4
+  resolved@1: 100%
+```
+
+The new commit carries the evidence in its message:
+
+```text
+Bulk discount on cart lines: solved by opencode (opencode/deepseek-v4.1-flash-free)
+
+Task: toyshop-a471ba4-bulk-discount-on-cart-lines-007
+Base commit: a471ba47d0913375f9bcbb3b7557bca97f39c881
+Agent: opencode · Model: opencode/deepseek-v4.1-flash-free · Attempt 1
+Hidden tests: 3/3 fail_to_pass passed, 28/28 pass_to_pass passed
+```
+
+In that run the model also edited an existing test file (it added its own
+tests). The harness put that file back before grading, recorded it under
+`tests_tampered`, and committed only the source change to the branch.
+
+### Which models
+
+[OpenCode](https://github.com/sst/opencode) is the default agent because it talks
+to many providers with one CLI. Pass the model as `provider/model`:
+
+| Provider | Example `--model` | Credentials |
+| --- | --- | --- |
+| OpenCode Zen (has free models) | `opencode/deepseek-v4.1-flash-free`, `opencode/qwen3.6-plus` | `opencode auth login`, or `OPENCODE_API_KEY` |
+| NVIDIA (build.nvidia.com, free credits) | `nvidia/<model id from opencode models nvidia>` | `opencode auth login`, or `NVIDIA_API_KEY` |
+| TokenRouter | `tokenrouter/<model id>` | `opencode auth login`, or `TOKENROUTER_API_KEY` |
+| AWS Bedrock (Qwen) | `amazon-bedrock/qwen.qwen3-coder-480b-a35b-v1:0` | `AWS_ACCESS_KEY_ID` + `AWS_SECRET_ACCESS_KEY` + `AWS_REGION`, or `AWS_BEARER_TOKEN_BEDROCK` |
+
+`--use-host-auth` copies **only the login for the model's provider** from your
+OpenCode `auth.json` into the sandbox (through stdin, never a command line);
+the container is removed after the attempt. Without it, the harness forwards
+the provider's environment variables instead. Run `opencode models` to see the
+exact model IDs your accounts can use: in our test, two IDs listed by the
+catalogue were rejected by the provider with "model not found", which the
+harness reports as `agent_error`.
+
+### Other commands and agents
 
 ```sh
 factory harness agents                                   # list agents
 factory harness run --agent oracle                       # sanity check: must resolve 100%
 factory harness run --agent noop                         # sanity check: must resolve 0%
-factory harness run --agent claude-code --k 3            # needs ANTHROPIC_API_KEY
+factory harness run --agent opencode --model … --k 3     # without assignments: all tasks in the store
 factory harness run --agent command --cmd 'my-agent --task-file {instruction_file}'
 ```
 
 | Agent | What it runs | State |
 | --- | --- | --- |
+| `opencode` | `opencode run --auto --standalone -m <model>` ([repo](https://github.com/sst/opencode), `@opencode/cli` 2.3.2) | **verified with a real model** |
 | `oracle` | applies the reference patch | verified |
 | `noop` | changes nothing | verified |
 | `command` | any shell command you give it | verified |
 | `claude-code` | `claude -p … --output-format json` ([repo](https://github.com/anthropics/claude-code)) | preset, not yet run with a real key |
 | `codex` | `codex exec …` ([repo](https://github.com/openai/codex)) | preset, not yet run with a real key |
 | `aider` | `aider --message-file …` ([repo](https://github.com/Aider-AI/aider)) | preset, not yet run with a real key |
-| `mini-swe-agent` | `mini -y --exit-immediately …` ([repo](https://github.com/SWE-agent/mini-swe-agent)) | preset, not yet run with a real key |
+| `mini-swe-agent` | `mini -y --exit-immediately …`, LiteLLM models such as `bedrock/qwen…` ([repo](https://github.com/SWE-agent/mini-swe-agent)) | preset, not yet run with a real key |
 | your own | `[harness.agents.NAME]` in `factory.toml` | |
 
 Each attempt is graded into one category: `resolved`, `wrong_behaviour`,
-`regression`, `build_error`, `no_change`, `timeout` or `patch_apply_fail`. The
-summary reports **resolved@k**, pass rate, time and cost (when the agent reports
-it), and a difficulty per task: *easy* (every attempt solved it), *medium*
-(some) or *unsolved*. An unsolved task gets a note in the review log, because it
-may be unsolvable and deserves a human look.
+`regression`, `build_error`, `no_change`, `agent_error` (the agent failed, for
+example a bad model ID), `timeout` or `patch_apply_fail`. The summary reports
+**resolved@k**, pass rate, time and cost (when the agent reports it), and a
+difficulty per task: *easy* (every attempt solved it), *medium* (some) or
+*unsolved*. An unsolved task gets a note in the review log, because it may be
+unsolvable and deserves a human look.
 
-**Cheating is blocked.** API keys reach the agent through the environment and
-never appear on a command line or in logs. An agent that edits or deletes
-existing tests to make them pass gets those files put back before grading, and
-the attempt records which files it touched.
+**Cheating is blocked.** The agent's sandbox never contains the hidden tests or
+the reference solution (checked before the agent starts). API keys never
+appear on a command line or in logs. Existing tests the agent edits or deletes
+are put back before grading.
 
 ### Harbor compatibility
 
@@ -336,7 +399,7 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works
 ```sh
 git clone https://github.com/sreenivasivbieb/task-factory && cd task-factory
 uv sync
-uv run pytest                      # 127 tests; Docker tests skip with a message if Docker is missing
+uv run pytest                      # 134 tests; Docker tests skip with a message if Docker is missing
 ```
 
 Run the whole flow on the bundled toy repo:
@@ -365,7 +428,8 @@ uv run factory harness run --agent oracle          # harness sanity check: 100% 
 | `factory export` | Write every valid task into the task store as `pending` | ✅ |
 | `factory tasks list · show · approve · delete · restore · edit · new · add · publish · summary` | Human review and authoring | ✅ |
 | `factory review` | Interactive review, one task at a time | ✅ |
-| `factory harness agents · run` (alias `factory bench`) | Run AI coding agents on tasks and score them | ✅ |
+| `factory tasks assign · unassign · assignments` | Assign tasks to a test model | ✅ |
+| `factory harness agents · run · work` (alias `factory bench`) | Run AI coding agents on tasks, score them, branch passing solutions | ✅ |
 | `factory ideas` · `generate` · `report` · `run` | Feature source, LLM generation, evidence report, one-shot pipeline | 🔜 M6–M10 |
 
 Flags on every command: `--workdir`, `--config`, `--seed`, `--force`, `--dry-run`,

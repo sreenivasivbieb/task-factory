@@ -24,15 +24,16 @@ def status_text(status: str) -> Text:
     return Text(status, style=f"bold {STATUS_STYLE.get(status, 'white')}")
 
 
-def tasks_table(entries: list[TaskEntry]) -> Table:
+def tasks_table(entries: list[TaskEntry], assigned: dict[str, list[str]] | None = None) -> Table:
+    assigned = assigned or {}
     t = Table(box=box.SIMPLE_HEAVY, header_style="bold", expand=False)
-    for col in ("#", "task", "status", "kind", "tags", "tests", "mutants", "author"):
+    for col in ("#", "task", "status", "kind", "tags", "tests", "mutants", "author", "assigned"):
         t.add_column(col, overflow="fold", no_wrap=(col == "task"))
     for i, e in enumerate(entries, 1):
         v = e.meta.validation
         score = f"{v.mutants_caught}/{v.mutants_run}" if v.mutants_run else "-"
         t.add_row(str(i), e.task_id, status_text(e.status), e.meta.kind, ", ".join(e.meta.tags),
-                  str(len(e.meta.fail_to_pass)), score, e.author)
+                  str(len(e.meta.fail_to_pass)), score, e.author, ", ".join(assigned.get(e.task_id, [])) or "-")
     return t
 
 
@@ -67,7 +68,9 @@ def header(e: TaskEntry) -> Panel:
     if m.manual_edit:
         grid.add_row("manual edit", Text(m.manual_edit_reason or "(no reason)", style="magenta"))
     for ev in e.events[-3:]:
-        grid.add_row("review", f"{ev.action} by {ev.reviewer}" + (f": {ev.reason}" if ev.reason else ""))
+        who = f" [{ev.agent}{':' + ev.model if ev.model else ''}]" if ev.agent else ""
+        extra = f" → branch {ev.branch}" if ev.branch else ""
+        grid.add_row("review", f"{ev.action}{who} by {ev.reviewer}" + (f": {ev.reason}" if ev.reason else "") + extra)
     return Panel(grid, title=f"[bold]{e.task_id}", border_style=STATUS_STYLE.get(e.status, "white"))
 
 

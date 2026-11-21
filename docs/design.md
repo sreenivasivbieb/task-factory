@@ -214,7 +214,8 @@ workdir/
 │   └── .trash/             deleted packages (restorable)
 ├── drafts/<name>/          tasks people are writing (factory tasks new)
 ├── edits/<task_id>/        editable copies of packages (factory tasks edit)
-├── harness/<run_id>/       agent runs: per attempt agent.diff, agent log, grade.json; summary.json
+├── harness/<run_id>/       agent runs: per attempt agent.diff, solution.diff, agent log, grade.json
+├── solutions/<repo>/       clone holding one branch per passing AI solution (ai/<agent>-<model>/<task>)
 └── logs/run-*.jsonl        structured log of every command, LLM and container call
 ```
 
@@ -720,6 +721,87 @@ Design choices:
   harness refuses to run agent presets there; `oracle`, `noop` and `command`
   are allowed for tests.
 
+### Assignments and the worker
+
+A reviewer (or a script) assigns tasks to a test model; a worker runs them.
+
+```mermaid
+sequenceDiagram
+    participant R as Reviewer
+    participant L as Review log
+    participant W as factory harness work
+    participant H as Harness
+    participant S as Solutions repo
+    R->>L: assign (task, agent, model)
+    W->>L: read open assignments
+    W->>H: run each (agent, model) group on its tasks, k attempts
+    H-->>W: attempt results
+    alt resolved
+        W->>S: commit the graded diff on a new branch
+    end
+    W->>L: result (resolved n/k, category, run id, branch)
+    W->>L: note "unsolved by …" when no attempt passed
+```
+
+An assignment is an `assign` event in the review log with the agent and model.
+It stays open until a `result` (written by the worker) or an `unassign`.
+Assigning never changes a task's review status, and a deleted task cannot be
+assigned. `factory tasks assignments --all` shows every assignment with its
+result and branch.
+
+### Passing solutions become git nodes
+
+For every resolved attempt the worker records the solution as a new commit in a
+**solutions repo** (`workdir/solutions/<repo>`, a clone; the supplied repo is
+never touched):
+
+1. check out the task's base commit (detached);
+2. apply exactly the diff that was graded: the agent's diff with any restored
+   test files removed, so the branch holds the source change only, and never
+   the hidden tests;
+3. commit as `task-factory harness`, with the task, base commit, agent, model,
+   attempt, hidden-test counts and run id in the message;
+4. create the branch `ai/<agent>-<model>/<task_id>` (a `-2`, `-3`, … suffix when
+   it already exists).
+
+```text
+* 5c7b3ce  (ai/opencode-deepseek-v4-1-flash-free/toyshop-…-007)  Bulk discount on cart lines: solved by opencode
+|
+* a471ba4  base commit of the task
+```
+
+The branch can be inspected with `git diff <base> <branch>`, compared with the
+reference solution, or pushed for review like any pull request. Branches are
+made for real agents only (not for `oracle` or `noop`); `--no-branch` or
+`harness.branches = false` turns them off.
+
+### Model providers
+
+The default agent is OpenCode (`@opencode/cli`, pinned to 2.3.2 for
+repeatability; the older `opencode-ai` npm package is v1 and lacks the
+`--standalone` flag). One CLI reaches many providers, selected by the model's
+prefix: `opencode/…` (OpenCode Zen, including free models), `nvidia/…`
+(build.nvidia.com), `tokenrouter/…`, and `amazon-bedrock/…` (for example
+`amazon-bedrock/qwen.qwen3-coder-480b-a35b-v1:0`). mini-swe-agent reaches the same
+providers through LiteLLM (`bedrock/…`, `nvidia_nim/…`, `openrouter/…`).
+
+Credentials reach the sandbox in one of two ways, both without touching a
+command line or a log:
+
+- **Environment variables** listed in the agent's `secrets`
+  (`NVIDIA_API_KEY`, `TOKENROUTER_API_KEY`, `OPENCODE_API_KEY`, the `AWS_*` set, …),
+  passed as `docker exec -e NAME` with the value in the docker CLI's environment.
+- **`--use-host-auth`** (opt-in): the harness reads the agent's own login file on
+  the host (OpenCode's `auth.json`), keeps **only the entry for the model's
+  provider**, and writes it into the sandbox through stdin with mode 600. The
+  container is deleted after the attempt.
+
+This path was verified end to end with a real model: `opencode` with
+`opencode/deepseek-v4.1-flash-free` resolved the toy task in 28 seconds and
+produced a branch. Two catalogue model IDs on other providers were rejected by
+the provider ("model not found"); such runs are graded `agent_error` so a setup
+problem is never mistaken for a weak model.
+
 ### Agents are data
 
 An agent is a small record: install commands (run as root when the agent image
@@ -749,6 +831,7 @@ mini-swe-agent.
 | `no_change` | the agent produced no diff |
 | `timeout` | the agent ran out of time |
 | `patch_apply_fail` | the agent's diff does not apply to a fresh copy |
+| `agent_error` | the agent exited with an error and changed nothing (bad model ID, missing key, …) |
 
 The run summary gives **resolved@k** (tasks solved in at least one of k
 attempts), pass rate over all attempts, mean agent time, total cost when the
@@ -820,7 +903,7 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 
 ## 17. How it is tested
 
-There are 127 tests. Unit tests use two small fixture repositories that are rich
+There are 134 tests. Unit tests use two small fixture repositories that are rich
 enough to show real failure modes:
 
 | Fixture | Contents |
@@ -900,3 +983,5 @@ hackathon credits are known.
 | **Oracle** | A harness agent that applies the reference patch; it must resolve every task |
 | **resolved@k** | Share of tasks an agent solved in at least one of k attempts |
 | **Harbor** | An open-source agent-evaluation framework whose task format we export |
+| **Assignment** | A request in the review log that one agent + model attempt one task |
+| **Solutions repo** | A clone of the task's repo where each passing AI solution is a commit on its own branch |

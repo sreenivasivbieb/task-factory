@@ -94,6 +94,22 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
 - **D35 Harbor export.** `tasks publish --format harbor` writes Harbor's layout
   (`/solution/solve.sh`, `/tests/test.sh` writing `/logs/verifier/reward.txt`, `environment/` with
   the repo archive). Verified with the real Harbor CLI: oracle 1.000, nop 0.000.
+- **D36 Assignments live in the review log** (user decision, 2026-11-21): `assign` events with
+  agent + model, closed by the worker's `result` event or by `unassign`. `factory harness work`
+  runs every open assignment. Assignments never change review status.
+- **D37 A passing AI solution becomes a new git node** (user decision): a commit on branch
+  `ai/<agent>-<model>/<task_id>` in `workdir/solutions/<repo>` (a clone, never the supplied repo).
+  The commit holds exactly the graded diff (restored test files removed; hidden tests never
+  included). Only real agents get branches, not `oracle`/`noop`.
+- **D38 OpenCode is the default test agent** (user wanted AWS Qwen, OpenCode, TokenRouter or
+  NVIDIA free models): one CLI covers all four through `provider/model`. Pinned to
+  `@opencode/cli@2.3.2`; the `opencode-ai` npm package is v1 and lacks `--standalone`.
+- **D39 `--use-host-auth` is opt-in** and copies only the model provider's entry of the agent's
+  login file into the sandbox, through stdin, mode 600.
+- **D40 `agent_error` category**: an agent that exits non-zero without changing anything is not
+  reported as `no_change`, so a wrong model ID or key is not mistaken for a weak model.
+- **D41 Custom agents may run on the local backend** (they are the user's own commands, e.g. in
+  tests); built-in presets that install third-party agents are refused there.
 
 ## Limitations
 
@@ -111,3 +127,8 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   which test files were restored.
 - L7 Agent presets other than `oracle`, `noop` and `command` have not been run with real API
   keys in this environment; their command lines follow each tool's documentation.
+- L8 Test protection cannot tell a harmless edit (an agent adding its own tests to an existing
+  test file) from a harmful one; both are restored before grading and listed in
+  `tests_tampered`.
+- L9 AWS Bedrock Qwen is configured but not run here (no AWS credentials on this machine); the
+  OpenCode path itself was verified with an OpenCode Zen free model.

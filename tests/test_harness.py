@@ -144,3 +144,8 @@ def test_harbor_task_runs_like_harbor(docker_package, tmp_path, solve, reward):
                         "-v", f"{logs}:/logs/verifier", tag, "bash", "-c", script],
                        capture_output=True, text=True, timeout=300)
     assert (logs / "reward.txt").read_text().strip() == reward, r.stdout + r.stderr
+
+
+def test_agent_error_category(local_factory, package, tmp_path):
+    summary, _ = _run(local_factory, package, tmp_path, get_agent("command", cmd="echo 'model not found' >&2; exit 1"))
+    assert summary.categories == {"agent_error": 1}

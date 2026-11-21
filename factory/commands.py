@@ -174,7 +174,10 @@ def cmd_tasks_list(args, cfg) -> int:
     if not entries:
         console.print(f"no {args.status if args.status != 'all' else ''} tasks in {store.root}".replace("  ", " "))
         return 0
-    console.print(render.tasks_table(entries))
+    assigned: dict[str, list[str]] = {}
+    for a in store.assignments():
+        assigned.setdefault(a.task_id, []).append(a.label)
+    console.print(render.tasks_table(entries, assigned))
     c = store.summary()["counts"]
     console.print(f"[yellow]{c['pending']} pending[/]  [green]{c['approved']} approved[/]  "
                   f"[red]{c['deleted']} deleted[/]   store: {store.root}")
@@ -394,13 +397,12 @@ def cmd_harness_run(args, cfg) -> int:
     console = _console()
     console.print(f"running [bold]{agent.name}[/] on {len(packages)} task(s), k={args.k or cfg.harness.k}")
 
-    def on_result(r):
-        style = "green" if r.resolved else "red"
-        console.print(f"  [{style}]{r.category:16}[/] {r.task_id} (attempt {r.attempt}, agent {r.agent_duration_s}s)")
+    on_result = _printer(console)
 
-    harness = Harness(make_factory(cfg), cfg, Workdir(cfg.workdir).harness)
+    harness = _make_harness(args, cfg)
     try:
-        summary = harness.run(packages, agent, model=args.model, k=args.k or cfg.harness.k, on_result=on_result)
+        summary = harness.run(packages, agent, model=args.model or cfg.harness.default_model,
+                              k=args.k or cfg.harness.k, on_result=on_result)
     finally:
         harness.close()
     t = Table(header_style="bold", title=f"{agent.name} · resolved@{summary.k} {summary.resolved_at_k:.0%} · "
@@ -413,4 +415,118 @@ def cmd_harness_run(args, cfg) -> int:
             store.note(ts.task_id, f"unsolved by {agent.name} in {ts.attempts} attempt(s); check it is solvable")
     console.print(t)
     console.print(f"results: {Workdir(cfg.workdir).harness / summary.run_id}")
+    return 0
+
+
+def _printer(console):
+    def on_result(r):
+        style = "green" if r.resolved else "red"
+        line = f"  [{style}]{r.category:16}[/] {r.task_id} (attempt {r.attempt}, agent {r.agent_duration_s}s)"
+        if r.branch:
+            line += f"\n      [green]new branch[/] {r.branch} @ {r.commit[:12]}"
+        console.print(line)
+    return on_result
+
+
+def _make_harness(args, cfg):
+    from .harness.runner import Harness
+    from .harness.solutions import SolutionRepos
+    from .sandbox import make_factory
+
+    wd = Workdir(cfg.workdir)
+    branches = cfg.harness.branches and not getattr(args, "no_branch", False)
+    return Harness(make_factory(cfg), cfg, wd.harness,
+                   use_host_auth=getattr(args, "use_host_auth", False) or cfg.harness.use_host_auth,
+                   solutions=SolutionRepos(wd.root / "solutions") if branches else None)
+
+
+def cmd_tasks_assign(args, cfg) -> int:
+    from .harness.agents import get_agent
+
+    store = _store_of(args, cfg)
+    agent = args.agent or cfg.harness.default_agent
+    get_agent(agent, cfg.harness.agents, cmd="x" if agent == "command" else None)  # fail early on a typo
+    model = args.model or cfg.harness.default_model
+    for tid in args.task_ids:
+        a = store.assign(tid, agent, model, args.note)
+        print(f"assigned  {a.task_id}  ->  {a.label}")
+    print("run them with: factory harness work")
+    return 0
+
+
+def cmd_tasks_unassign(args, cfg) -> int:
+    store = _store_of(args, cfg)
+    for tid in args.task_ids:
+        print(f"unassigned {store.unassign(tid, args.agent, args.model)} assignment(s) of {tid}")
+    return 0
+
+
+def cmd_tasks_assignments(args, cfg) -> int:
+    from rich.table import Table
+
+    store = _store_of(args, cfg)
+    rows = store.assignments(open_only=not args.all)
+    if not rows:
+        print("no open assignments" if not args.all else "no assignments")
+        return 0
+    t = Table(header_style="bold")
+    for col in ("task", "agent:model", "assigned by", "state", "result", "branch"):
+        t.add_column(col, overflow="fold")
+    for a in rows:
+        r = a.result
+        state = "open" if a.open else ("done" if r.action == "result" else "cancelled")
+        t.add_row(a.task_id, a.label, a.assigned_by, state, (r.reason or "") if r else "", (r.branch or "") if r else "")
+    _console().print(t)
+    return 0
+
+
+def cmd_harness_work(args, cfg) -> int:
+    from .harness.agents import get_agent
+
+    store = _store_of(args, cfg)
+    console = _console()
+    groups: dict[tuple[str, str | None], list] = {}
+    for a in store.assignments():
+        entry = store.get(a.task_id)
+        if entry.status == "deleted":
+            console.print(f"[yellow]skip[/] {a.task_id}: deleted")
+            continue
+        groups.setdefault((a.agent, a.model), []).append(entry)
+    if not groups:
+        console.print("no open assignments (assign with: factory tasks assign TASK_ID --model ...)")
+        return 0
+    k = args.k or cfg.harness.k
+    resolved_total = 0
+    harness = _make_harness(args, cfg)
+    try:
+        for (agent_name, model), entries in groups.items():
+            agent = get_agent(agent_name, cfg.harness.agents)
+            if args.timeout:
+                agent = agent.model_copy(update={"timeout_s": args.timeout})
+            console.print(f"[bold]{agent_name}[/]" + (f" · {model}" if model else "") + f": {len(entries)} task(s), k={k}")
+            results = []
+            printer = _printer(console)
+
+            def collect(r, printer=printer, results=results):
+                results.append(r)
+                printer(r)
+
+            summary = harness.run([e.path for e in entries], agent, model=model, k=k, on_result=collect)
+            for e in entries:
+                rs = [r for r in results if r.task_id == e.task_id]
+                ok = [r for r in rs if r.resolved]
+                cats = ", ".join(sorted({r.category for r in rs}))
+                text = f"resolved {len(ok)}/{len(rs)}" + ("" if ok else f" ({cats})")
+                branch = next((r.branch for r in ok if r.branch), None)
+                store.record_result(e.task_id, agent_name, model, text, run_id=summary.run_id, branch=branch)
+                if not ok:
+                    store.note(e.task_id, f"unsolved by {agent_name}{' ' + model if model else ''} in {len(rs)} "
+                                          "attempt(s); check it is solvable")
+                resolved_total += bool(ok)
+            console.print(f"  resolved@{k}: {summary.resolved_at_k:.0%} · results: "
+                          f"{Workdir(cfg.workdir).harness / summary.run_id}")
+    finally:
+        harness.close()
+    console.print(f"done: {resolved_total} task(s) resolved; passing solutions are branches in "
+                  f"{Workdir(cfg.workdir).root / 'solutions'}")
     return 0
