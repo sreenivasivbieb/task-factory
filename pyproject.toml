@@ -12,6 +12,7 @@ dependencies = [
 
 [project.scripts]
 factory = "factory.cli:main"
+task-factory = "factory.cli:main"
 
 [dependency-groups]
 dev = [

@@ -65,8 +65,9 @@ class LocalSandboxFactory(SandboxFactory):
         self.cache_dir.mkdir(parents=True, exist_ok=True)
         return self.cache_dir
 
-    def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
-        if commands:
+    def build_derived_image(self, base: ImageRef, name: str, commands: list[str],
+                            files: dict[str, Path] | None = None) -> ImageRef:
+        if commands or files:
             log.warning("local backend does not run image commands for %s (the host must already have them): %s",
                         name, commands)
         return base

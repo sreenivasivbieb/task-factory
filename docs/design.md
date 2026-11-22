@@ -822,9 +822,9 @@ never touched):
    it already exists).
 
 ```text
-* 5c7b3ce  (ai/opencode-deepseek-v4-1-flash-free/toyshop-…-007)  Bulk discount on cart lines: solved by opencode
+* <sha>    (ai/<agent>-<model>/toyshop-…-007)  Bulk discount on cart lines: solved by <agent>
 |
-* a471ba4  base commit of the task
+* <base>   base commit of the task
 ```
 
 The branch can be inspected with `git diff <base> <branch>`, compared with the
@@ -834,10 +834,10 @@ made for real agents only (not for `oracle` or `noop`); `--no-branch` or
 
 ### Model providers
 
-The default agent is OpenCode (`@opencode/cli`, pinned to 2.3.2 for
-repeatability; the older `opencode-ai` npm package is v1 and lacks the
-`--standalone` flag). One CLI reaches many providers, selected by the model's
-prefix: `opencode/…` (OpenCode Zen, including free models), `nvidia/…`
+The default agent is `task-factory`: the Task Factory engine binary, copied
+into the agent image with a `COPY` (the image tag includes the binary's
+SHA-256, so a rebuilt engine gets a new image). It reaches many providers,
+selected by the model's prefix: `opencode/…` (Zen, including free models), `nvidia/…`
 (build.nvidia.com), `tokenrouter/…`, and `amazon-bedrock/…` (for example
 `amazon-bedrock/qwen.qwen3-coder-480b-a35b-v1:0`). mini-swe-agent reaches the same
 providers through LiteLLM (`bedrock/…`, `nvidia_nim/…`, `openrouter/…`).
@@ -846,18 +846,21 @@ Credentials reach the sandbox in one of two ways, both without touching a
 command line or a log:
 
 - **Environment variables** listed in the agent's `secrets`
-  (`NVIDIA_API_KEY`, `TOKENROUTER_API_KEY`, `OPENCODE_API_KEY`, the `AWS_*` set, …),
+  (`NVIDIA_API_KEY`, `TOKENROUTER_API_KEY`, `TASK_FACTORY_API_KEY`, the `AWS_*` set, …),
   passed as `docker exec -e NAME` with the value in the docker CLI's environment.
-- **`--use-host-auth`** (opt-in): the harness reads the agent's own login file on
-  the host (OpenCode's `auth.json`), keeps **only the entry for the model's
+- **`--use-host-auth`** (opt-in, for agents that declare a login file): the
+  harness reads the agent's own login file on the host, keeps **only the entry for the model's
   provider**, and writes it into the sandbox through stdin with mode 600. The
   container is deleted after the attempt.
 
-This path was verified end to end with a real model: `opencode` with
-`opencode/deepseek-v4.1-flash-free` resolved the toy task in 28 seconds and
-produced a branch. Two catalogue model IDs on other providers were rejected by
-the provider ("model not found"); such runs are graded `agent_error` so a setup
-problem is never mistaken for a weak model.
+The engine was checked inside a `python:3.11-slim` task image (it starts, opens
+a session and reaches the provider). An earlier end-to-end run with the same
+engine source and `opencode/deepseek-v4.1-flash-free` resolved the toy task in
+28 seconds and produced a branch; the free quota was used up when re-checked
+after the move to the bundled engine (HTTP 429, graded `agent_error`). Two
+catalogue model IDs on other providers were rejected by the provider ("model
+not found"); such runs are graded `agent_error` so a setup problem is never
+mistaken for a weak model.
 
 ### Agents are data
 
@@ -1017,6 +1020,8 @@ missing; `uv run pytest -m "not docker"` runs the rest in seconds.
 | Run on Harbor's agents | `factory tasks publish --format harbor --out DIR`, then `harbor run -p DIR -a <agent>` |
 
 ## 19. Roadmap
+
+The first prompt-driven authoring path is available through `factory generate`. It connects directly to the configured model provider and uses the existing validator. The roadmap below describes the wider, automated pipeline.
 
 | Milestone | Component | What it adds |
 | --- | --- | --- |

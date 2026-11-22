@@ -61,9 +61,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, default=30)
     _common(p)
 
-    p = sub.add_parser("generate", help="(planned, M6) generate tasks with an LLM and validate them")
-    p.add_argument("--count", type=int, default=10)
+    p = sub.add_parser("generate", help="draft and validate a task using a configured model")
+    p.add_argument("--prompt", required=True, help="describe the coding task")
+    p.add_argument("--model", help="model ID (defaults to FACTORY_MODEL)")
+    p.add_argument("--file", action="append", default=[], help="repo-relative context file (repeatable)")
     _common(p)
+
+    sub.add_parser("chat", help="launch the Task Factory terminal")
+    sub.add_parser("terminal", help="use the bundled terminal engine’s native commands")
 
     p = sub.add_parser("validate", help="run the gates on task drafts, or re-verify packages")
     p.add_argument("--tasks", type=Path, required=True,
@@ -149,7 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = tsub.add_parser("assign", help="assign tasks to a test model (run them with: factory harness work)")
     p.add_argument("task_ids", nargs="+")
-    p.add_argument("--agent", default=None, help="agent (default: harness.default_agent = opencode)")
+    p.add_argument("--agent", default=None, help="agent (default: harness.default_agent = task-factory)")
     p.add_argument("--model", default=None, help="model, e.g. nvidia/..., tokenrouter/..., amazon-bedrock/qwen...")
     p.add_argument("--note", default=None)
     _store(p)
@@ -183,7 +188,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--k", type=int, default=None, help="attempts per task (default: harness.k = 1)")
     p.add_argument("--timeout", type=int, default=None, help="agent timeout in seconds")
     p.add_argument("--use-host-auth", action="store_true",
-                   help="copy your stored agent login (e.g. OpenCode auth.json, that provider only) into the sandbox")
+                   help="copy your stored agent login (that provider only) into the sandbox")
     p.add_argument("--no-branch", action="store_true", help="do not create git branches for passing solutions")
     _store(p)
     _common(p)
@@ -194,7 +199,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def _harness_run_args(p: argparse.ArgumentParser) -> None:
-    p.add_argument("--agent", required=True, help="oracle, noop, opencode, claude-code, codex, aider, "
+    p.add_argument("--agent", required=True, help="oracle, noop, task-factory, claude-code, codex, aider, "
                                                   "mini-swe-agent, command, or one from [harness.agents]")
     p.add_argument("--solver", dest="agent", help=argparse.SUPPRESS)
     p.add_argument("--model", default=None)
@@ -206,7 +211,7 @@ def _harness_run_args(p: argparse.ArgumentParser) -> None:
                    help="which tasks from the store (default: all not deleted)")
     p.add_argument("--timeout", type=int, default=None, help="agent timeout in seconds")
     p.add_argument("--use-host-auth", action="store_true",
-                   help="copy your stored agent login (e.g. OpenCode auth.json, that provider only) into the sandbox")
+                   help="copy your stored agent login (that provider only) into the sandbox")
     p.add_argument("--no-branch", action="store_true", help="do not create git branches for passing solutions")
     _store(p)
     _common(p)
@@ -225,6 +230,20 @@ def _config(args: argparse.Namespace) -> FactoryConfig:
 
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if not argv or argv[0] not in {
+        "load", "inspect", "ideas", "generate", "validate", "export", "report", "run",
+        "tasks", "review", "harness", "bench", "--help", "-h",
+    }:
+        from .terminal import launch
+
+        explicit = bool(argv and argv[0] in {"chat", "terminal"})
+        args = argv[1:] if explicit else argv
+        try:
+            return launch(args, integrate=not argv or argv[0] != "terminal")
+        except (FactoryError, OSError) as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return EXIT_USAGE
     args = parser.parse_args(argv)
     try:
         cfg = _config(args)

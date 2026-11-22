@@ -42,9 +42,9 @@ class GenerationConfig(_Section):
 class HarnessConfig(_Section):
     agents: dict[str, dict] = Field(default_factory=dict)  # custom agents, see harness/agents.py
     k: int = 1
-    default_agent: str = "opencode"
+    default_agent: str = "task-factory"
     default_model: str | None = None  # e.g. "nvidia/qwen/qwen3-coder-480b-a35b-instruct"
-    use_host_auth: bool = False  # copy the agent's stored login (e.g. OpenCode auth.json) into the sandbox
+    use_host_auth: bool = False  # copy the agent's stored login file into the sandbox
     branches: bool = True  # commit every resolved attempt to a new git branch in workdir/solutions
 
 

@@ -5,7 +5,7 @@ The solutions repo is a clone of the task's repo under ``workdir/solutions/<repo
 out the task's starting commit, applies exactly the diff that passed the hidden
 tests, commits it, and points a new branch at that commit::
 
-    ai/<agent>-<model>/<task_id>          e.g. ai/opencode-nvidia-qwen3-coder/toyshop-...-007
+    ai/<agent>-<model>/<task_id>          e.g. ai/task-factory-nvidia-qwen3-coder/toyshop-...-007
 
 The branch can be inspected, diffed against the base commit, or pushed.
 """

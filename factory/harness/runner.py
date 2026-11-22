@@ -112,7 +112,7 @@ def host_auth_payload(agent: AgentSpec, model: str | None) -> bytes:
         raise ConfigError(f"agent '{agent.name}' has no host login file to use")
     path = Path(os.path.expanduser(agent.host_auth_file))
     if not path.exists():
-        raise ConfigError(f"{path} not found; log in with the agent first (for OpenCode: opencode auth login)")
+        raise ConfigError(f"{path} not found; log in with the agent first")
     provider = (model or agent.default_model or "").split("/", 1)[0]
     if not provider:
         raise ConfigError("--model provider/model is needed to pick the stored login")
@@ -155,9 +155,13 @@ class Harness:
             raise ConfigError(f"agent '{agent.name}' must run in Docker (the local backend has no isolation)")
         auth = host_auth_payload(agent, model) if (self.use_host_auth and agent.host_auth_file) else None
         missing = [s for s in agent.secrets if not os.environ.get(s)]
-        if auth is None and agent.secrets and len(missing) == len(agent.secrets):
+        if auth is None and agent.secrets and not agent.secrets_optional and len(missing) == len(agent.secrets):
             raise ConfigError(f"agent '{agent.name}' needs one of these environment variables: "
                               f"{', '.join(agent.secrets)}")
+        files = {dest: Path(os.path.expanduser(src)) for dest, src in agent.files.items()}
+        for src in files.values():
+            if not src.is_file():
+                raise ConfigError(f"agent '{agent.name}' needs {src}; build it first (see README.md)")
         run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{agent.name}"
         run_dir = self.out_dir / run_id
         results: list[AttemptResult] = []
@@ -169,7 +173,7 @@ class Harness:
             env = EnvConfig.load(Path(pkg) / "environment" / "env.json")
             spec = self._spec(meta, Path(pkg))
             base = self.factory.build_image(spec, env)
-            agent_image = self.factory.build_derived_image(base, agent.name, agent.install)
+            agent_image = self.factory.build_derived_image(base, agent.name, agent.install, files)
             for attempt in range(1, k + 1):
                 adir = run_dir / meta.task_id / f"attempt-{attempt}"
                 adir.mkdir(parents=True, exist_ok=True)

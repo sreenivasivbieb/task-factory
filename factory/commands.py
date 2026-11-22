@@ -76,6 +76,19 @@ def load_state(cfg: FactoryConfig) -> tuple[RepoSpec, EnvConfig]:
 __all__ = ["cmd_load", "cmd_inspect", "load_state", "InspectResult"]
 
 
+def cmd_generate(args, cfg) -> int:
+    from .generation.author import draft_task
+
+    spec, _ = load_state(cfg)
+    if args.dry_run:
+        print(f"Generate a task from {spec.name}@{spec.short_sha} using {args.model or 'FACTORY_MODEL'}")
+        return 0
+    draft = draft_task(spec, Workdir(cfg.workdir).drafts, args)
+    print(f"Generated draft: {draft}")
+    args.tasks = draft
+    return cmd_validate(args, cfg)
+
+
 def _validation_targets(path):
     """A draft folder, a package folder, or a folder of either."""
     from pathlib import Path
