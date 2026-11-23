@@ -111,6 +111,9 @@ BUILTIN: dict[str, AgentSpec] = {
         model_flag="-m {model}",
         secrets=["NVIDIA_API_KEY", "TOKENROUTER_API_KEY", "TASK_FACTORY_API_KEY", "OPENROUTER_API_KEY", *_BEDROCK],
         env={"OPENCODE_DISABLE_AUTOUPDATE": "1"}, secrets_optional=True,
+        # Logins made in the terminal with /connect; copied only with --use-host-auth.
+        host_auth_file="~/.local/share/task-factory/auth.json",
+        sandbox_auth_file="/home/factory/.local/share/task-factory/auth.json",
         experimental=True),
     "mini-swe-agent": AgentSpec(
         description="mini-swe-agent from the SWE-agent team (mini -y --exit-immediately); LiteLLM models such as "

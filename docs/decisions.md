@@ -142,6 +142,16 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   mutant could be made; `--task` accepts the same partial IDs as `tasks show`; planned commands
   (`ideas`, `generate`, `report`, `run`) are labelled with their milestone in `--help`; tags
   `security`, `scalability` and `api design` were added.
+- **D50 Fixes after trying the terminal end to end** (2026-11-23, after PR #1):
+  `build_terminal.py` installs the engine's dependencies *before* branding (the rebrand step
+  needs the checkout's `typescript`, so a first build from a fresh clone failed);
+  `/generate-task` shows the gate and reject reason when a draft is rejected (it only said
+  "Draft rejected"); the generator's prompts show the exact JSON shape and also accept a bare
+  `{path: text}` map for tests, because a real model dropped the `{"tests": ...}` wrapper;
+  `factory`/`task-factory` open the terminal only with no arguments, `chat`/`terminal`, an engine
+  flag or a project folder, so a typo such as `factory taks` is an error again; the
+  `task-factory` agent declares the engine's login file so `--use-host-auth` works with logins
+  made in the terminal.
 
 ## Limitations
 

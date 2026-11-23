@@ -35,3 +35,15 @@ def test_generate_validates_model_draft(py_repo, tmp_path, monkeypatch, capsys):
     assert "1/1 valid" in capsys.readouterr().out
     draft_path, = (workdir / "runs").glob("*/draft.json")
     assert json.loads(draft_path.read_text())["generated_by"]["model"] == "test/model"
+
+
+def test_test_files_accepts_a_bare_path_map():
+    files = {"tests/test_x.py": "def test_x(): pass\n"}
+    assert author._test_files({"tests": files}) == files
+    assert author._test_files(files) == files  # models often drop the {"tests": ...} wrapper
+    assert author._test_files({"title": "x"}) is None
+
+
+def test_ask_strips_any_code_fence():
+    for fence in ("```json\n{\"a\": 1}\n```", "```\n{\"a\": 1}\n```", "{\"a\": 1}"):
+        assert author._ask(lambda _: fence, "p") == {"a": 1}

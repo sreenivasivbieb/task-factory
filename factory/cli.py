@@ -228,13 +228,24 @@ def _config(args: argparse.Namespace) -> FactoryConfig:
     return cfg
 
 
+def _launches_terminal(argv: list[str]) -> bool:
+    """No arguments, ``chat``/``terminal``, an engine flag (``--continue``) or a project folder.
+
+    Any other word goes to the factory parser, so a typo such as ``factory taks`` is an error
+    instead of silently opening the terminal.
+    """
+    if not argv or argv[0] in {"chat", "terminal"}:
+        return True
+    first = argv[0]
+    if first in {"-h", "--help"} or first in build_parser()._subparsers._group_actions[0].choices:
+        return False
+    return first.startswith("-") or Path(first).expanduser().is_dir()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     argv = list(sys.argv[1:] if argv is None else argv)
-    if not argv or argv[0] not in {
-        "load", "inspect", "ideas", "generate", "validate", "export", "report", "run",
-        "tasks", "review", "harness", "bench", "--help", "-h",
-    }:
+    if _launches_terminal(argv):
         from .terminal import launch
 
         explicit = bool(argv and argv[0] in {"chat", "terminal"})

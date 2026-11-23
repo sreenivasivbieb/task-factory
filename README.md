@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `153 tests` · `Harbor-compatible`
+`Python 3.11+` · `Docker` · `166 tests` · `Harbor-compatible`
 
 </div>
 
@@ -392,7 +392,7 @@ factory harness run --agent command --cmd 'my-agent --task-file {instruction_fil
 
 | Agent | What it runs | State |
 | --- | --- | --- |
-| `task-factory` | `task-factory-engine run --auto --standalone -m <model>` (the bundled engine) | runs in the sandbox and reaches the provider; a full solve is not yet re-run after the rename |
+| `task-factory` | `task-factory-engine run --auto --standalone -m <model>` (the bundled engine) | **verified with a real model** (`opencode/deepseek-v4.1-flash-free` resolved the toy task in 44 s, branch created) |
 | `oracle` | applies the reference patch | verified |
 | `noop` | changes nothing | verified |
 | `command` | any shell command you give it | verified |
@@ -447,7 +447,7 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works
 ```sh
 git clone https://github.com/sreenivasivbieb/task-factory && cd task-factory
 uv sync
-uv run pytest                      # 153 tests; Docker tests skip with a message if Docker is missing
+uv run pytest                      # 166 tests; Docker tests skip with a message if Docker is missing
 ```
 
 Run the whole flow on the bundled toy repo:

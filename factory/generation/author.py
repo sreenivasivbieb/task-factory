@@ -12,8 +12,10 @@ from ..repo.loader import export_clean
 
 def _ask(reply, prompt: str) -> dict:
     response = reply(prompt).strip()
-    if response.startswith("```json") and response.endswith("```"):
-        response = response[7:-3].strip()
+    if response.startswith("```") and response.endswith("```"):  # ```json ... ``` or ``` ... ```
+        response = response[3:-3].strip()
+        if response.startswith("json"):
+            response = response[4:].strip()
     try:
         data = json.loads(response)
     except ValueError as exc:
@@ -32,9 +34,18 @@ def _relative(value: str) -> PurePosixPath:
     return path
 
 
-def _write_files(root: Path, files, repo: Path) -> None:
+def _test_files(data: dict):
+    """``{"tests": {path: text}}``, or the path map itself (models often drop the wrapper)."""
+    if "tests" in data:
+        return data["tests"]
+    if data and all(isinstance(v, str) and "/" in k for k, v in data.items()):
+        return data
+    return None
+
+
+def _write_files(root: Path, files, repo: Path, what: str) -> None:
     if not isinstance(files, dict) or not files:
-        raise PackageError("The model must return a non-empty map of paths to file contents")
+        raise PackageError(f"The model must return {what} as a non-empty map of paths to file contents")
     for name, content in files.items():
         relative = _relative(name)
         if not isinstance(content, str):
@@ -74,7 +85,8 @@ def draft_task(spec, drafts: Path, args, *, reply=None) -> Path:
         solution = _ask(reply,
             "Draft a benign coding exercise for the user request below. "
             "Return only JSON with title, requirements (Markdown), and after "
-            "(an object mapping repo-relative source paths to complete replacement text). "
+            "(an object mapping repo-relative source paths to complete replacement text), shaped like "
+            '{"title": "...", "requirements": "...", "after": {"pkg/module.py": "<whole file>"}}. '
             "Describe observable behavior. Keep tests out of the reference changes.\n"
             f"Request: {args.prompt}\nBaseline: {baseline}")
         title, requirements = solution.get("title"), solution.get("requirements")
@@ -84,14 +96,15 @@ def draft_task(spec, drafts: Path, args, *, reply=None) -> Path:
             "Write hidden feature tests for these requirements against the baseline. "
             "Every new test should fail before the feature and pass after it. "
             "Return only JSON with tests (an object mapping repo-relative test paths "
-            "to complete file contents, preserving any existing tests you replace).\n"
+            "to complete file contents, preserving any existing tests you replace), shaped like "
+            '{"tests": {"tests/test_feature.py": "<whole file>"}}.\n'
             f"Requirements: {requirements}\nBaseline: {baseline}")
 
         drafts.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(prefix=".generating-", dir=drafts) as staging:
             path = Path(staging)
-            _write_files(path / "after", solution.get("after"), repo)
-            _write_files(path / "tests", tests.get("tests"), repo)
+            _write_files(path / "after", solution.get("after"), repo, '"after" (the reference change)')
+            _write_files(path / "tests", _test_files(tests), repo, '"tests" (the hidden tests)')
             (path / "requirements.md").write_text(requirements, encoding="utf-8")
             (path / "task.json").write_text(
                 json.dumps({"title": title, "model": model}), encoding="utf-8",

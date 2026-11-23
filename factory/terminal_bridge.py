@@ -81,14 +81,16 @@ def main() -> None:
         send({"type": "prompt", "text": prompt})
         return json.loads(sys.stdin.readline())["answer"]
 
+    output = io.StringIO()
     try:
         request = json.loads(sys.stdin.readline())
-        output = io.StringIO()
         with redirect_stdout(output):
             generate(request["request"], request["model"], reply)
         send({"type": "result", "text": output.getvalue().strip()})
     except (FactoryError, OSError, ValueError, KeyError) as exc:
-        send({"type": "result", "text": f"Task Factory: {exc}"})
+        # Keep what the pipeline printed (e.g. the gate and reject reason), not only the summary.
+        printed = "\n".join(output.getvalue().strip().splitlines()[-12:])
+        send({"type": "result", "text": f"{printed}\n\nTask Factory: {exc}".strip()})
 
 
 if __name__ == "__main__":

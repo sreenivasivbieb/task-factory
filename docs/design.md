@@ -853,11 +853,11 @@ command line or a log:
   provider**, and writes it into the sandbox through stdin with mode 600. The
   container is deleted after the attempt.
 
-The engine was checked inside a `python:3.11-slim` task image (it starts, opens
-a session and reaches the provider). An earlier end-to-end run with the same
-engine source and `opencode/deepseek-v4.1-flash-free` resolved the toy task in
-28 seconds and produced a branch; the free quota was used up when re-checked
-after the move to the bundled engine (HTTP 429, graded `agent_error`). Two
+The bundled engine was verified end to end on 2026-11-23: `factory harness work`
+with `opencode/deepseek-v4.1-flash-free` resolved the toy task in 44 seconds
+inside a `python:3.11-slim` task image and produced a branch. The engine's own
+logins (made in the terminal with `/connect`, stored in
+`~/.local/share/task-factory/auth.json`) are what `--use-host-auth` copies. Two
 catalogue model IDs on other providers were rejected by the provider ("model
 not found"); such runs are graded `agent_error` so a setup problem is never
 mistaken for a weak model.
@@ -966,7 +966,7 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 
 ## 17. How it is tested
 
-There are 153 tests. Unit tests use two small fixture repositories that are rich
+There are 166 tests. Unit tests use two small fixture repositories that are rich
 enough to show real failure modes:
 
 | Fixture | Contents |

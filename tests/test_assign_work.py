@@ -126,3 +126,15 @@ def test_default_agent_runs_our_own_engine(monkeypatch, tmp_path):
     assert agent.files == {ENGINE_IN_IMAGE: str(tmp_path / "task-factory/bin/task-factory-engine")}
     assert f"{ENGINE_IN_IMAGE} run --auto --standalone" in agent.command("/tmp/i.md", "nvidia/x")
     assert "TASK_FACTORY_API_KEY" in agent.secrets
+
+
+def test_engine_uses_terminal_logins_with_host_auth(tmp_path, monkeypatch):
+    from factory.harness.agents import get_agent
+
+    auth = tmp_path / ".local/share/task-factory/auth.json"
+    auth.parent.mkdir(parents=True)
+    auth.write_text(json.dumps({"nvidia": {"type": "api", "key": "n-1"}, "opencode": {"type": "api", "key": "z"}}))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    agent = get_agent("task-factory")
+    assert agent.sandbox_auth_file == "/home/factory/.local/share/task-factory/auth.json"
+    assert json.loads(host_auth_payload(agent, "nvidia/qwen/x")) == {"nvidia": {"type": "api", "key": "n-1"}}

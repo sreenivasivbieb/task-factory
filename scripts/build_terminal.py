@@ -153,9 +153,12 @@ def brand(source: Path) -> None:
     subprocess.run(["node", str(Path(__file__).with_name("rebrand_strings.mjs")), str(source)], check=True)
 
 
-def build(source: Path, output: Path, skip_install: bool, terminal_only: bool) -> None:
-    if not skip_install:
-        subprocess.run([*BUN, "install", "--frozen-lockfile"], cwd=source, check=True)
+def install(source: Path) -> None:
+    # Before branding: rebrand_strings.mjs parses the source with the checkout's own typescript.
+    subprocess.run([*BUN, "install", "--frozen-lockfile"], cwd=source, check=True)
+
+
+def build(source: Path, output: Path, terminal_only: bool) -> None:
     env = {**os.environ, "OPENCODE_CHANNEL": "task-factory", "OPENCODE_VERSION": "2.3.2"}
     flags = ["--single", "--skip-install"]
     if terminal_only:
@@ -190,9 +193,11 @@ def main() -> None:
     if not source.exists():
         subprocess.run(["git", "clone", "--depth", "1", "--branch", UPSTREAM_TAG, UPSTREAM_REPO, str(source)],
                        check=True)
+    if not args.skip_install:
+        install(source)
     brand(source)
     if not args.brand_only:
-        build(source, args.output, args.skip_install, terminal_only=not args.with_web_ui)
+        build(source, args.output, terminal_only=not args.with_web_ui)
 
 
 if __name__ == "__main__":

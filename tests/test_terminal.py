@@ -87,3 +87,30 @@ def test_launcher_keeps_sessions_from_the_old_database_name(monkeypatch, tmp_pat
     assert (data / "task-factory.db").read_text() == "db"
     assert (data / "task-factory.db-wal").read_text() == "wal"
     assert not (data / "opencode-task-factory.db").exists()
+
+
+def test_bridge_reports_why_a_draft_was_rejected(monkeypatch, capsys):
+    import io
+
+    from factory.errors import PackageError
+
+    def rejected(request, model, reply):
+        print("NOT added: FEATURE_TESTS_FAIL_WITH_PATCH: feature tests fail with the reference patch")
+        raise PackageError("Draft rejected by Task Factory.")
+
+    monkeypatch.setattr(terminal_bridge, "generate", rejected)
+    monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps({"request": "x", "model": "m/x"}) + "\n"))
+    terminal_bridge.main()
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert "FEATURE_TESTS_FAIL_WITH_PATCH" in result["text"] and "Draft rejected" in result["text"]
+
+
+def test_only_flags_folders_or_no_args_open_the_terminal(tmp_path, monkeypatch):
+    from factory.cli import _launches_terminal
+
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "tasks").mkdir()  # a folder named like a subcommand is still the subcommand
+    assert _launches_terminal([]) and _launches_terminal(["chat"]) and _launches_terminal(["terminal", "models"])
+    assert _launches_terminal(["--continue"]) and _launches_terminal([str(tmp_path)])
+    assert not _launches_terminal(["taks", "list"])  # typo: argparse reports it
+    assert not _launches_terminal(["tasks", "list"]) and not _launches_terminal(["--help"])
