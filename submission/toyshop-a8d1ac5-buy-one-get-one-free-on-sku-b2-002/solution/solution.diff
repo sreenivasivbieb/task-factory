@@ -1,0 +1,47 @@
+diff --git a/toyshop/pricing.py b/toyshop/pricing.py
+index 0719e08..7921d48 100644
+--- a/toyshop/pricing.py
++++ b/toyshop/pricing.py
+@@ -6,14 +6,25 @@ from .money import percent_of
+ 
+ COUPONS = {"SAVE10": 10, "SAVE25": 25}
+ 
++BOGO_SKUS = frozenset({"B2"})
++BOGO_FREE_EVERY = 2  # one item is free for every this many items
+ 
+-def line_total(price_cents: int, qty: int) -> int:
+-    """Total for one cart line."""
+-    return price_cents * qty
++
++def line_total(price_cents: int, qty: int, sku: str | None = None) -> int:
++    """Total for one cart line.
++
++    A line whose SKU is in ``BOGO_SKUS`` gets one item free for every
++    ``BOGO_FREE_EVERY`` items: two items cost one, three cost two, and so on.
++    Other SKUs (and a line with no SKU) are charged ``price_cents * qty``.
++    """
++    amount = price_cents * qty
++    if sku in BOGO_SKUS and qty >= BOGO_FREE_EVERY:
++        amount = price_cents * (qty - qty // BOGO_FREE_EVERY)
++    return amount
+ 
+ 
+ def subtotal(cart: Cart) -> int:
+-    return sum(line_total(cart.catalog.get(sku).price_cents, qty) for sku, qty in cart.lines())
++    return sum(line_total(cart.catalog.get(sku).price_cents, qty, sku) for sku, qty in cart.lines())
+ 
+ 
+ def coupon_discount(amount_cents: int, code: str | None) -> int:
+diff --git a/toyshop/receipt.py b/toyshop/receipt.py
+index aab0bad..6c89a43 100644
+--- a/toyshop/receipt.py
++++ b/toyshop/receipt.py
+@@ -9,7 +9,7 @@ def render(cart: Cart, coupon: str | None = None) -> str:
+     lines = []
+     for sku, qty in cart.lines():
+         product = cart.catalog.get(sku)
+-        amount = line_total(product.price_cents, qty)
++        amount = line_total(product.price_cents, qty, sku)
+         lines.append(f"{qty} x {product.name} {format_cents(amount)}")
+     sub = subtotal(cart)
+     discount = coupon_discount(sub, coupon)

@@ -1,0 +1,220 @@
+{
+  "command": "python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 --junitxml=.factory/report.xml",
+  "exec": {
+    "schema_version": 1,
+    "argv": [
+      "sh",
+      "-c",
+      "python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 --junitxml=.factory/report.xml"
+    ],
+    "exit_code": 0,
+    "stdout": "...............................                                          [100%]\n31 passed in 0.05s\n",
+    "stderr": "",
+    "duration_s": 1.051,
+    "timed_out": false,
+    "oom_killed": false
+  },
+  "reports": [
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"31\" time=\"0.049\" timestamp=\"2026-11-23T13:34:46.200807+00:00\" hostname=\"gireesh\"><testcase classname=\"tests.test_bulk_discount\" name=\"test_bulk_discount_boundary\" file=\"tests/test_bulk_discount.py\" line=\"3\" time=\"0.000\" /><testcase classname=\"tests.test_bulk_discount\" name=\"test_bulk_discount_rounds_half_up\" file=\"tests/test_bulk_discount.py\" line=\"8\" time=\"0.000\" /><testcase classname=\"tests.test_bulk_discount\" name=\"test_bulk_discount_in_subtotal\" file=\"tests/test_bulk_discount.py\" line=\"12\" time=\"0.000\" /><testcase classname=\"tests.test_cart\" name=\"test_add_and_quantity\" file=\"tests/test_cart.py\" line=\"6\" time=\"0.000\" /><testcase classname=\"tests.test_cart\" name=\"test_add_unknown_sku\" file=\"tests/test_cart.py\" line=\"12\" time=\"0.000\" /><testcase classname=\"tests.test_cart\" name=\"test_add_non_positive\" file=\"tests/test_cart.py\" line=\"17\" time=\"0.000\" /><testcase classname=\"tests.test_cart\" name=\"test_add_over_max\" file=\"tests/test_cart.py\" line=\"22\" time=\"0.000\" /><testcase classname=\"tests.test_cart\" name=\"test_remove_partial_and_full\" file=\"tests/test_cart.py\" line=\"28\" time=\"0.000\" /><testcase classname=\"tests.test_cart\" name=\"test_remove_too_many\" file=\"tests/test_cart.py\" line=\"36\" time=\"0.000\" /><testcase classname=\"tests.test_cart\" name=\"test_lines_sorted\" file=\"tests/test_cart.py\" line=\"42\" time=\"0.000\" /><testcase classname=\"tests.test_catalog\" name=\"test_get\" file=\"tests/test_catalog.py\" line=\"6\" time=\"0.000\" /><testcase classname=\"tests.test_catalog\" name=\"test_get_unknown\" file=\"tests/test_catalog.py\" line=\"10\" time=\"0.000\" /><testcase classname=\"tests.test_catalog\" name=\"test_len\" file=\"tests/test_catalog.py\" line=\"15\" time=\"0.000\" /><testcase classname=\"tests.test_catalog\" name=\"test_negative_price_rejected\" file=\"tests/test_catalog.py\" line=\"19\" time=\"0.000\" /><testcase classname=\"tests.test_catalog\" name=\"test_search_case_insensitive\" file=\"tests/test_catalog.py\" line=\"24\" time=\"0.000\" /><testcase classname=\"tests.test_catalog\" name=\"test_by_tag\" file=\"tests/test_catalog.py\" line=\"28\" time=\"0.000\" /><testcase classname=\"tests.test_flaky\" name=\"test_sometimes_flaky\" file=\"tests/test_flaky.py\" line=\"11\" time=\"0.000\" /><testcase classname=\"tests.test_money\" name=\"test_to_cents_whole\" file=\"tests/test_money.py\" line=\"5\" time=\"0.000\" /><testcase classname=\"tests.test_money\" name=\"test_to_cents_decimal\" file=\"tests/test_money.py\" line=\"9\" time=\"0.000\" /><testcase classname=\"tests.test_money\" name=\"test_to_cents_negative\" file=\"tests/test_money.py\" line=\"14\" time=\"0.000\" /><testcase classname=\"tests.test_money\" name=\"test_to_cents_rejects_bad_input\" file=\"tests/test_money.py\" line=\"18\" time=\"0.000\" /><testcase classname=\"tests.test_money\" name=\"test_format_cents\" file=\"tests/test_money.py\" line=\"24\" time=\"0.000\" /><testcase classname=\"tests.test_money\" name=\"test_percent_of_rounds_half_up\" file=\"tests/test_money.py\" line=\"30\" time=\"0.000\" /><testcase classname=\"tests.test_pricing\" name=\"test_line_total\" file=\"tests/test_pricing.py\" line=\"6\" time=\"0.000\" /><testcase classname=\"tests.test_pricing\" name=\"test_subtotal\" file=\"tests/test_pricing.py\" line=\"10\" time=\"0.000\" /><testcase classname=\"tests.test_pricing\" name=\"test_total_with_coupon\" file=\"tests/test_pricing.py\" line=\"16\" time=\"0.000\" /><testcase classname=\"tests.test_pricing\" name=\"test_unknown_coupon\" file=\"tests/test_pricing.py\" line=\"21\" time=\"0.000\" /><testcase classname=\"tests.test_pricing\" name=\"test_no_coupon_no_discount\" file=\"tests/test_pricing.py\" line=\"27\" time=\"0.000\" /><testcase classname=\"tests.test_receipt\" name=\"test_render_plain\" file=\"tests/test_receipt.py\" line=\"3\" time=\"0.000\" /><testcase classname=\"tests.test_receipt\" name=\"test_render_with_coupon\" file=\"tests/test_receipt.py\" line=\"8\" time=\"0.000\" /><testcase classname=\"tests.test_slow\" name=\"test_many_carts\" file=\"tests/test_slow.py\" line=\"6\" time=\"0.004\" /></testsuite></testsuites>"
+  ],
+  "summary": {
+    "schema_version": 1,
+    "results": [
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bulk_discount.py::test_bulk_discount_boundary",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bulk_discount.py::test_bulk_discount_rounds_half_up",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bulk_discount.py::test_bulk_discount_in_subtotal",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_cart.py::test_add_and_quantity",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_cart.py::test_add_unknown_sku",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_cart.py::test_add_non_positive",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_cart.py::test_add_over_max",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_cart.py::test_remove_partial_and_full",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_cart.py::test_remove_too_many",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_cart.py::test_lines_sorted",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_catalog.py::test_get",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_catalog.py::test_get_unknown",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_catalog.py::test_len",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_catalog.py::test_negative_price_rejected",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_catalog.py::test_search_case_insensitive",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_catalog.py::test_by_tag",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_flaky.py::test_sometimes_flaky",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_money.py::test_to_cents_whole",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_money.py::test_to_cents_decimal",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_money.py::test_to_cents_negative",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_money.py::test_to_cents_rejects_bad_input",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_money.py::test_format_cents",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_money.py::test_percent_of_rounds_half_up",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_pricing.py::test_line_total",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_pricing.py::test_subtotal",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_pricing.py::test_total_with_coupon",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_pricing.py::test_unknown_coupon",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_pricing.py::test_no_coupon_no_discount",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_receipt.py::test_render_plain",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_receipt.py::test_render_with_coupon",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_slow.py::test_many_carts",
+        "status": "passed",
+        "duration_s": 0.004
+      }
+    ],
+    "counts": {
+      "passed": 31,
+      "failed": 0,
+      "skipped": 0,
+      "error": 0
+    },
+    "raw_exit_code": 0,
+    "timed_out": false,
+    "error": null
+  }
+}

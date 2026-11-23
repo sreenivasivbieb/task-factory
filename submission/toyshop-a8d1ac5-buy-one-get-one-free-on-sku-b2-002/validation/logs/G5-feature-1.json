@@ -1,0 +1,70 @@
+{
+  "command": "python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 --junitxml=.factory/report.xml tests/test_bogo.py",
+  "exec": {
+    "schema_version": 1,
+    "argv": [
+      "sh",
+      "-c",
+      "python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 --junitxml=.factory/report.xml tests/test_bogo.py"
+    ],
+    "exit_code": 0,
+    "stdout": "......                                                                   [100%]\r\n- generated xml file: C:\\Users\\DELL\\AppData\\Local\\Temp\\factory-sb-097shd07\\repo\\.factory\\report.xml -\r\n6 passed in 0.12s\r\n",
+    "stderr": "",
+    "duration_s": 1.037,
+    "timed_out": false,
+    "oom_killed": false
+  },
+  "reports": [
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"0\" skipped=\"0\" tests=\"6\" time=\"0.035\" timestamp=\"2026-11-23T14:13:28.413313+00:00\" hostname=\"gireesh\"><testcase classname=\"tests.test_bogo\" name=\"test_bogo_line_total_even_quantity\" file=\"tests\\test_bogo.py\" line=\"4\" time=\"0.001\" /><testcase classname=\"tests.test_bogo\" name=\"test_bogo_line_total_odd_quantity\" file=\"tests\\test_bogo.py\" line=\"9\" time=\"0.000\" /><testcase classname=\"tests.test_bogo\" name=\"test_bogo_only_applies_to_listed_skus\" file=\"tests\\test_bogo.py\" line=\"15\" time=\"0.000\" /><testcase classname=\"tests.test_bogo\" name=\"test_line_total_without_sku_is_unchanged\" file=\"tests\\test_bogo.py\" line=\"20\" time=\"0.000\" /><testcase classname=\"tests.test_bogo\" name=\"test_bogo_in_subtotal_and_total\" file=\"tests\\test_bogo.py\" line=\"25\" time=\"0.001\" /><testcase classname=\"tests.test_bogo\" name=\"test_bogo_in_receipt\" file=\"tests\\test_bogo.py\" line=\"32\" time=\"0.001\" /></testsuite></testsuites>"
+  ],
+  "summary": {
+    "schema_version": 1,
+    "results": [
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_line_total_even_quantity",
+        "status": "passed",
+        "duration_s": 0.001
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_line_total_odd_quantity",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_only_applies_to_listed_skus",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_line_total_without_sku_is_unchanged",
+        "status": "passed",
+        "duration_s": 0.0
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_in_subtotal_and_total",
+        "status": "passed",
+        "duration_s": 0.001
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_in_receipt",
+        "status": "passed",
+        "duration_s": 0.001
+      }
+    ],
+    "counts": {
+      "passed": 6,
+      "failed": 0,
+      "skipped": 0,
+      "error": 0
+    },
+    "raw_exit_code": 0,
+    "timed_out": false,
+    "error": null
+  }
+}
