@@ -15,6 +15,30 @@ ENGINE = "task-factory-engine"
 BUN = ["npm", "exec", "--yes", "--package=bun@1.4.4", "--", "bun"]
 LOGO = "import { TextAttributes } from \"@opentui/core\"\nimport { useTerminalDimensions } from \"@opentui/solid\"\nimport { useTheme } from \"../context/theme\"\n\nexport function Logo() {\n  const theme = useTheme()\n  const dimensions = useTerminalDimensions()\n  return (\n    <box>\n      {dimensions().height >= 12 && (\n        <text fg={theme.text.base} attributes={TextAttributes.BOLD}>\n          {dimensions().width < 24 ? \"TASK FACTORY\" : \"T A S K   F A C T O R Y\"}\n        </text>\n      )}\n    </box>\n  )\n}\n"
 
+# Engine commands that do not belong in Task Factory: hidden from slash completion and the
+# command palette (ctrl+p). Kept: models, providers, sessions, agents, themes, settings, help.
+HIDDEN_COMMANDS = [
+    "btw",         # side question
+    "cd",          # change the session's folder (tasks belong to the project the terminal opened)
+    "debug",       # engine debug info
+    "goal",        # keep an agent looping on an objective
+    "highlights",  # upstream release notes
+    "init",        # write AGENTS.md
+    "mcps",        # MCP servers
+    "pair",        # pair a browser or phone (the web UI is not built)
+    "plugins",     # turning plugins off would remove the Task Factory commands
+    "reload",      # reload engine config
+    "restart",     # restart the background service
+    "review",      # review uncommitted changes
+    "skills",      # agent skills
+    "stats",       # usage poster
+    "terminal",    # shell pane
+    "update",      # updates come from rebuilding the engine
+    "usage",       # hosted subscription usage
+    "worktrees",   # git worktrees
+]
+_HIDDEN = "[" + ", ".join(f'"{name}"' for name in HIDDEN_COMMANDS) + "]"
+
 CHANGES = {
     "packages/util/src/global.ts": [
         ('const app = "opencode"', 'const app = "task-factory"'),
@@ -30,6 +54,16 @@ CHANGES = {
         ('setTerminalTitle(renderer, "OpenCode")', 'setTerminalTitle(renderer, "Task Factory")'),
         ('`OC | ${', '`TF | ${'),
         ('title: "Update OpenCode"', 'title: "Update Task Factory"'),
+    ],
+    "packages/tui/src/component/prompt/autocomplete.tsx": [
+        ("      if (!slash) return []", f"      if (!slash || {_HIDDEN}.includes(slash.name)) return []"),
+        ("{\n      commandNames.add(serverCommand.name)",
+         f"{{\n      if ({_HIDDEN}.includes(serverCommand.name)) continue\n      commandNames.add(serverCommand.name)"),
+    ],
+    "packages/tui/src/component/command-palette.tsx": [
+        ("if (!command.id || !command.palette || command.id === COMMAND_PALETTE_COMMAND) return []",
+         "if (!command.id || !command.palette || command.id === COMMAND_PALETTE_COMMAND"
+         f" || (command.slash && {_HIDDEN}.includes(command.slash.name))) return []"),
     ],
     "packages/tui/src/attention.ts": [
         ('const DEFAULT_TITLE = "OpenCode"', 'const DEFAULT_TITLE = "Task Factory"'),
@@ -130,12 +164,20 @@ CHANGES = {
 }
 
 
+# Files whose patch embeds HIDDEN_COMMANDS: reset to the pinned version before patching.
+REGENERATED = ["packages/tui/src/component/prompt/autocomplete.tsx", "packages/tui/src/component/command-palette.tsx"]
+
+
 def brand(source: Path) -> None:
     # HEAD may be the pin itself or local commits on top of it (e.g. committed branding).
     pinned = subprocess.run(["git", "merge-base", "--is-ancestor", UPSTREAM, "HEAD"],
                             cwd=source, capture_output=True, check=False)
     if pinned.returncode != 0:
         raise SystemExit(f"Expected the OpenCode v2.3.2 source checkout at {UPSTREAM} (or a branch on it)")
+    for name in REGENERATED:  # start from the pinned file, so an edited HIDDEN_COMMANDS list applies cleanly
+        pinned_text = subprocess.run(["git", "show", f"{UPSTREAM}:{name}"], cwd=source, capture_output=True,
+                                     text=True, check=True).stdout
+        (source / name).write_text(pinned_text, encoding="utf-8")
     for name, replacements in CHANGES.items():
         path = source / name
         current = path.read_text(encoding="utf-8")

@@ -102,6 +102,11 @@ then, inside any git project:
 | `/run-task` | Pick tasks (or "all approved"), pick a model (the selected one is first), and watch it solve them in Docker, live. Passing solutions become git branches. |
 | `/results` | Runs → attempts → one page with the verdict, hidden-test counts, the **agent's whole session** (what it said, every tool call and its output, tokens), the graded diff and the test output. |
 
+The engine's own commands that have nothing to do with tasks (`/pair`, `/stats`,
+`/usage`, `/update`, `/init`, `/review`, `/goal`, `/mcps`, `/plugins`, `/skills`,
+`/worktrees`, …) are hidden from `/` completion and the command palette; the list is
+`HIDDEN_COMMANDS` in `scripts/build_terminal.py` (rebuild the engine after changing it).
+
 Long commands stream their progress into a Task Factory page (`esc` goes back,
 `↑ ↓ pgup pgdn home end` scroll). Each project keeps its tasks, runs and solution
 branches in one folder outside the repo,

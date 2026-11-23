@@ -163,6 +163,14 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   plugin only renders and streams progress. Found on the way: `tasks add` recorded every draft
   as human-authored, so `/generate-task` tasks were disclosed as human ones; a draft's `model`
   is now kept as its author.
+- **D52 Engine commands unrelated to tasks are hidden** (user request, 2026-11-23): the build hides
+  them from `/` completion and the command palette (`HIDDEN_COMMANDS` in
+  `scripts/build_terminal.py`: btw, cd, debug, goal, highlights, init, mcps, pair, plugins, reload,
+  restart, review, skills, stats, terminal, update, usage, worktrees). Kept: models and providers,
+  sessions, agents, diff, editor, settings, status, themes, help, exit, and the Task Factory
+  commands. Hidden, not deleted: a typed command or its keybind still works, and the engine's
+  source stays a plain patch of upstream. `/plugins` is hidden because turning the Task Factory
+  plugin off from there would remove our commands.
 
 ## Limitations
 
