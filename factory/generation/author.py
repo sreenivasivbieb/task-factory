@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import tempfile
 from pathlib import Path, PurePosixPath
 
@@ -10,18 +11,32 @@ from ..model_client import ModelClient
 from ..repo.loader import export_clean
 
 
+def _json_object(response: str) -> dict | None:
+    """The JSON object in a model reply: the whole reply, a ```json block, or the first {...} in the text."""
+    text = response.strip()
+    candidates = [text]
+    fence = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.S)
+    if fence:
+        candidates.append(fence.group(1))
+    if "{" in text:
+        candidates.append(text[text.index("{"):])
+    decoder = json.JSONDecoder()
+    for candidate in candidates:
+        try:
+            data, _ = decoder.raw_decode(candidate.strip())
+        except ValueError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
+
+
 def _ask(reply, prompt: str) -> dict:
-    response = reply(prompt).strip()
-    if response.startswith("```") and response.endswith("```"):  # ```json ... ``` or ``` ... ```
-        response = response[3:-3].strip()
-        if response.startswith("json"):
-            response = response[4:].strip()
-    try:
-        data = json.loads(response)
-    except ValueError as exc:
-        raise PackageError("The model did not return a valid JSON object") from exc
-    if not isinstance(data, dict):
-        raise PackageError("The model did not return a JSON object")
+    response = reply(prompt)
+    data = _json_object(response or "")
+    if data is None:
+        start = " ".join((response or "").split())[:160]
+        raise PackageError(f"The model did not return a JSON object (it began: {start!r})")
     return data
 
 

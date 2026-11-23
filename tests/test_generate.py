@@ -47,3 +47,13 @@ def test_test_files_accepts_a_bare_path_map():
 def test_ask_strips_any_code_fence():
     for fence in ("```json\n{\"a\": 1}\n```", "```\n{\"a\": 1}\n```", "{\"a\": 1}"):
         assert author._ask(lambda _: fence, "p") == {"a": 1}
+
+
+def test_ask_finds_the_object_inside_prose():
+    reply = "Here is the task:\n```json\n{\"a\": {\"b\": 1}}\n```\nHope this helps!"
+    assert author._ask(lambda _: reply, "p") == {"a": {"b": 1}}
+    assert author._ask(lambda _: 'Sure! {"a": 2} done', "p") == {"a": 2}
+    import pytest
+    from factory.errors import PackageError
+    with pytest.raises(PackageError, match="it began: 'I cannot"):
+        author._ask(lambda _: "I cannot do that", "p")

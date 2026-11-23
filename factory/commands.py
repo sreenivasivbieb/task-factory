@@ -514,7 +514,10 @@ def cmd_harness_work(args, cfg) -> int:
     store = _store_of(args, cfg)
     console = _console()
     groups: dict[tuple[str, str | None], list] = {}
+    only = getattr(args, "only", None)  # {(task_id, agent, model)}: the terminal runs just what it picked
     for a in store.assignments():
+        if only is not None and (a.task_id, a.agent, a.model) not in only:
+            continue
         entry = store.get(a.task_id)
         if entry.status == "deleted":
             console.print(f"[yellow]skip[/] {a.task_id}: deleted")

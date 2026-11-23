@@ -152,6 +152,17 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   flag or a project folder, so a typo such as `factory taks` is an error again; the
   `task-factory` agent declares the engine's login file so `--use-host-auth` works with logins
   made in the terminal.
+- **D51 Terminal commands for the whole loop** (user decisions, 2026-11-23): `/setup`, `/tasks`,
+  `/run-task`, `/results` next to `/generate-task`. One stable workdir per project *outside* the
+  repo (`~/.local/state/task-factory/projects/<repo>-<hash>`), replacing a new temporary workdir
+  per generation. `/run-task` uses the selected model by default with a picker to change it,
+  assigns the tasks and runs only those (`harness work` gained an internal filter), and uses the
+  terminal's stored login for that provider when there is one. "Session outputs" are a Task
+  Factory page built from `agent.log.json` (messages, tool calls with output, tokens), not an
+  import into the engine's session list. Python does the work (`factory/terminal_ops.py`); the
+  plugin only renders and streams progress. Found on the way: `tasks add` recorded every draft
+  as human-authored, so `/generate-task` tasks were disclosed as human ones; a draft's `model`
+  is now kept as its author.
 
 ## Limitations
 
@@ -183,6 +194,10 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   change, so such tasks need correctness assertions in the timing test.
 - L12 Ideas mined from the repo (TODO/FIXME, `NotImplementedError` stubs, skipped tests, bug-fix
   commits, stale TODOs) are planned (M7, plus a history miner for bug fixes) but not built yet;
-  today tasks are written by people.
+  today tasks are written by people or drafted from a prompt (`/generate-task`, `factory generate`).
 - L13 A task can only depend on what the base image has: dependencies are installed at build
   time, and the grader restores build files, so a task that needs a new dependency cannot pass.
+- L14 `/generate-task` cannot use Zen's free models: the engine's `generate.text` is a stateless
+  request without the client/session headers of a normal session, and Zen answers "Free usage
+  limit reached" (the same models work in `/run-task`). We do not fake those headers.
+

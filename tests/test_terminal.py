@@ -1,8 +1,7 @@
 import json
 from pathlib import Path
 
-from factory import terminal, terminal_bridge
-from factory.config import FactoryConfig
+from factory import terminal, terminal_bridge, terminal_ops
 
 
 def test_launcher_preserves_upstream_arguments_and_adds_plugin(monkeypatch):
@@ -46,6 +45,20 @@ def test_launcher_ignores_inherited_engine_settings(monkeypatch):
     assert len(plugins) == 1 and plugins[0]["package"].endswith("/factory/terminal_plugin")
 
 
+def _local_project(monkeypatch, tmp_path, repo):
+    """Run the terminal ops on ``repo`` with the local backend and a private state folder."""
+    real = terminal_ops.project_config
+
+    def local(root):
+        cfg = real(root)
+        cfg.sandbox.backend = "local"
+        return cfg
+
+    monkeypatch.setattr(terminal_ops, "project_config", local)
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
+    monkeypatch.chdir(repo)
+
+
 def test_bridge_generates_valid_pending_task_in_current_repo(py_repo, tmp_path, monkeypatch, capsys):
     fixture = Path(__file__).parent / "fixtures/tasks/python/good_bulk_discount"
     requirements = (fixture / "requirements.md").read_text()
@@ -60,16 +73,12 @@ def test_bridge_generates_valid_pending_task_in_current_repo(py_repo, tmp_path, 
                                "after": {"toyshop/pricing.py": after}})
         return json.dumps({"tests": {"tests/test_bulk_discount.py": hidden}})
 
-    def local_config(**options):
-        cfg = FactoryConfig(**options)
-        cfg.sandbox.backend = "local"
-        return cfg
-
-    monkeypatch.setattr(terminal_bridge, "FactoryConfig", local_config)
-    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
-    monkeypatch.chdir(py_repo)
+    _local_project(monkeypatch, tmp_path, py_repo)
     terminal_bridge.generate("Add a discount to pricing.py", "test/model", reply)
     assert "(pending)" in capsys.readouterr().out
+    (task,) = terminal_ops.tasks(py_repo)  # in the project's stable workdir, outside the repo
+    assert task["status"] == "pending" and task["author"] == "test/model"
+    assert not (py_repo / "workdir").exists()
     assert "toyshop/pricing.py" in prompts[0]
     assert requirements in prompts[1]
     assert after not in prompts[1]
@@ -114,3 +123,18 @@ def test_only_flags_folders_or_no_args_open_the_terminal(tmp_path, monkeypatch):
     assert _launches_terminal(["--continue"]) and _launches_terminal([str(tmp_path)])
     assert not _launches_terminal(["taks", "list"])  # typo: argparse reports it
     assert not _launches_terminal(["tasks", "list"]) and not _launches_terminal(["--help"])
+
+
+def test_bridge_stops_when_the_model_request_fails(monkeypatch, capsys):
+    import io
+
+    def generate(request, model, reply):
+        reply("prompt")
+        raise AssertionError("must not continue after a failed model request")
+
+    monkeypatch.setattr(terminal_bridge, "generate", generate)
+    lines = [json.dumps({"request": "x", "model": "m/x"}), json.dumps({"error": "Free usage limit reached"})]
+    monkeypatch.setattr("sys.stdin", io.StringIO("\n".join(lines) + "\n"))
+    terminal_bridge.main()
+    result = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert not result["ok"] and result["error"] == "Task Factory: model request failed: Free usage limit reached"

@@ -1,22 +1,30 @@
-"""JSON-lines subprocess bridge between the Task Factory terminal and the task pipeline."""
+"""JSON-lines subprocess bridge between the Task Factory terminal and the task pipeline.
+
+The terminal plugin starts ``python -m factory.terminal_bridge`` in the project folder,
+writes one request line and reads events until a ``result``::
+
+    -> {"op": "run", "task_ids": [...], "model": "provider/model"}
+    <- {"type": "progress", "text": "..."}          any number, shown live
+    <- {"type": "prompt", "text": "..."}            generate only: answer with {"answer": "..."}
+    <- {"type": "result", "ok": true, "text": "...", "data": {...}}
+
+A request without ``op`` is the original ``/generate-task`` request
+(``{"request": ..., "model": ...}``).
+"""
 from __future__ import annotations
 
 import argparse
 import io
 import json
+import logging
 import os
 import shlex
-import subprocess
 import sys
-import tempfile
 from contextlib import redirect_stdout
 from pathlib import Path
 
-from .commands import cmd_inspect, cmd_tasks_add
-from .config import FactoryConfig
+from . import terminal_ops as ops
 from .errors import FactoryError, PackageError
-from .generation.author import draft_task
-from .repo.loader import load_repo
 from .state import Workdir
 from .workspace import Workspace
 
@@ -46,51 +54,128 @@ def select_context(root: Path, request: str) -> list[str]:
 
 
 def generate(request: str, model: str, reply) -> None:
-    root = Path.cwd()
-    git = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=root,
-                         capture_output=True, text=True, check=False)
-    if git.returncode == 0:
-        root = Path(git.stdout.strip())
-    state = Path(os.environ.get("XDG_STATE_HOME") or (Path.home() / ".local/state"))
-    parent = state / "task-factory" / "terminal"
-    parent.mkdir(parents=True, exist_ok=True)
-    wd = Workdir(Path(tempfile.mkdtemp(prefix="task-", dir=parent)))
-    cfg = FactoryConfig(workdir=str(wd.root))
-    source = root.as_uri() if (root / ".git").exists() else str(root)
-    spec = load_repo(source, wd.root)
-    spec.save(wd.repo_spec)
+    """Draft a task with the terminal's model, validate it, and add it to the project's store as pending."""
+    from .commands import cmd_tasks_add
+    from .generation.author import draft_task
+    from .models import RepoSpec
+
+    root = ops.project_root()
+    cfg = ops.ensure_setup(root)
+    wd = Workdir(cfg.workdir)
+    spec = RepoSpec.load(wd.repo_spec)
     args = argparse.Namespace(
         model=model, prompt=request, file=select_context(Path(spec.local_path), request),
         force=False, dry_run=False, pending=True, store=None, author=f"terminal:{model}",
     )
-    if cmd_inspect(args, cfg):
-        raise PackageError(f"Could not prepare the repository test environment. Work directory: {wd.root}")
+    print(f"asking {model} for a task on {spec.name}@{spec.short_sha}")
     args.draft = draft_task(spec, wd.drafts, args, reply=reply)
+    print("validating the draft in Docker (gates G0-G6)")
     if cmd_tasks_add(args, cfg):
         raise PackageError(f"Draft rejected by Task Factory. Draft: {args.draft}")
-    print(f"Review with: factory tasks list --status pending --workdir {shlex.quote(str(wd.root))}")
+    print("saved as pending: open /tasks to review it, or /run-task to try a model on it")
+    print(f"(terminal: factory tasks list --workdir {shlex.quote(str(wd.root))})")
+
+
+def handle(request: dict, reply):
+    """Run one request; returns the result's ``data``."""
+    op = request.get("op", "generate")
+    root = ops.project_root()
+    if op == "generate":
+        generate(request["request"], request["model"], reply)
+        return None
+    if op == "status":
+        return ops.status(root)
+    if op == "setup":
+        return ops.setup(root, force=bool(request.get("force")))
+    if op == "tasks":
+        return ops.tasks(root, request.get("status", "all"))
+    if op == "task":
+        return ops.task_detail(root, request["task_id"])
+    if op == "approve":
+        return ops.approve(root, request["task_id"])
+    if op == "delete":
+        return ops.delete(root, request["task_id"], request.get("reason", ""))
+    if op == "run":
+        ops.ensure_setup(root)
+        return ops.run(root, list(request["task_ids"]), request["model"])
+    if op == "runs":
+        return ops.runs(root)
+    if op == "attempts":
+        return ops.attempts(root, request["run_id"])
+    if op == "attempt":
+        return ops.attempt_detail(root, request["run_id"], request["task_id"], int(request["attempt"]))
+    raise PackageError(f"unknown request {op!r}")
+
+
+class _Progress(io.TextIOBase):
+    """Captured stdout that also forwards every complete line as a progress event."""
+
+    def __init__(self, send) -> None:
+        self.send, self.partial, self.lines = send, "", []
+
+    def writable(self) -> bool:
+        return True
+
+    def write(self, text: str) -> int:
+        self.partial += text
+        while "\n" in self.partial:
+            line, self.partial = self.partial.split("\n", 1)
+            self._emit(line)
+        return len(text)
+
+    def flush(self) -> None:
+        if self.partial:
+            self._emit(self.partial)
+            self.partial = ""
+
+    def _emit(self, line: str) -> None:
+        if line.strip():
+            self.lines.append(line)
+            self.send({"type": "progress", "text": line})
+
+
+class _LogToProgress(logging.Handler):
+    def __init__(self, out: _Progress) -> None:
+        super().__init__(logging.INFO)
+        self.out = out
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.out.write(record.getMessage() + "\n")
 
 
 def main() -> None:
     protocol = sys.stdout
+    os.environ.setdefault("COLUMNS", "160")  # rich wraps at 80 columns when not on a terminal
 
     def send(message):
         print(json.dumps(message), file=protocol, flush=True)
 
     def reply(prompt):
         send({"type": "prompt", "text": prompt})
-        return json.loads(sys.stdin.readline())["answer"]
+        answer = json.loads(sys.stdin.readline())
+        if answer.get("error"):  # the terminal could not reach the model (quota, login, network)
+            raise PackageError(f"model request failed: {answer['error']}")
+        return answer["answer"]
 
-    output = io.StringIO()
+    output = _Progress(send)
+    logger = logging.getLogger("factory")
+    logger.setLevel(logging.INFO)
+    handler = _LogToProgress(output)
+    logger.addHandler(handler)
     try:
         request = json.loads(sys.stdin.readline())
         with redirect_stdout(output):
-            generate(request["request"], request["model"], reply)
-        send({"type": "result", "text": output.getvalue().strip()})
-    except (FactoryError, OSError, ValueError, KeyError) as exc:
+            data = handle(request, reply)
+        output.flush()
+        send({"type": "result", "ok": True, "text": "\n".join(output.lines[-30:]).strip(), "data": data})
+    except (FactoryError, OSError, ValueError, KeyError, TypeError) as exc:
+        output.flush()
         # Keep what the pipeline printed (e.g. the gate and reject reason), not only the summary.
-        printed = "\n".join(output.getvalue().strip().splitlines()[-12:])
-        send({"type": "result", "text": f"{printed}\n\nTask Factory: {exc}".strip()})
+        printed = "\n".join(output.lines[-12:])
+        send({"type": "result", "ok": False, "text": f"{printed}\n\nTask Factory: {exc}".strip(),
+              "error": f"Task Factory: {exc}"})
+    finally:
+        logger.removeHandler(handler)
 
 
 if __name__ == "__main__":
