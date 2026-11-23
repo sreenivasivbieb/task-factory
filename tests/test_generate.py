@@ -57,3 +57,16 @@ def test_ask_finds_the_object_inside_prose():
     from factory.errors import PackageError
     with pytest.raises(PackageError, match="it began: 'I cannot"):
         author._ask(lambda _: "I cannot do that", "p")
+
+
+def test_requirements_get_the_title_as_heading(tmp_path, py_spec):
+    from argparse import Namespace
+
+    replies = iter([
+        json.dumps({"title": "Cart item count", "requirements": "## Summary\nCount items.",
+                    "after": {"toyshop/cart.py": "x = 1\n"}}),
+        json.dumps({"tests": {"tests/test_x.py": "def test_x():\n    pass\n"}}),
+    ])
+    draft = author.draft_task(py_spec, tmp_path / "drafts", Namespace(model="m/x", prompt="p", file=[]),
+                              reply=lambda _: next(replies))
+    assert (draft / "requirements.md").read_text().startswith("# Cart item count\n\n## Summary")

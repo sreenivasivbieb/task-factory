@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `177 tests` · `Harbor-compatible`
+`Python 3.11+` · `Docker` · `181 tests` · `Harbor-compatible`
 
 </div>
 
@@ -97,10 +97,11 @@ then, inside any git project:
 | Command | What it does |
 | --- | --- |
 | `/setup` | Pins the project's committed HEAD and builds its Docker test environment (once; again when HEAD moves). |
-| `/generate-task <request>` | The selected model drafts requirements, a reference change and hidden tests in two separate requests; the gates G0-G6 must pass before it is saved as pending. |
+| `/generate-task <request>` | The selected model drafts requirements, a reference change and hidden tests in two separate requests, in its own **read-only** session ("Generate task: …" in `/sessions`); the gates G0-G6 must pass before it is saved as pending and linked to the session you asked from. |
 | `/tasks` | Lists the project's tasks. Pick one to show it, run it, approve it, or delete it with a reason. |
 | `/run-task` | Pick tasks (or "all approved"), pick a model (the selected one is first), and watch it solve them in Docker, live. Passing solutions become git branches. |
 | `/results` | Runs → attempts → one page with the verdict, hidden-test counts, the **agent's whole session** (what it said, every tool call and its output, tokens), the graded diff and the test output. |
+| `/benchmark` | Tasks × models: who solved what, the design doc's difficulty tag (solved by all attempts, some or none; "none ⚠" means check it is solvable), resolve rate, average time and tokens per model, and why attempts failed. `o` opens any attempt. |
 
 The engine's own commands that have nothing to do with tasks (`/pair`, `/stats`,
 `/usage`, `/update`, `/init`, `/review`, `/goal`, `/mcps`, `/plugins`, `/skills`,
@@ -112,12 +113,31 @@ Long commands stream their progress into a Task Factory page (`esc` goes back,
 branches in one folder outside the repo,
 `~/.local/state/task-factory/projects/<repo>-<hash>/`, so the repo is never
 changed; the same folder works with the CLI (`factory tasks list --workdir …`).
-A model-generated task is recorded with that model as its author, never as
-human-authored.
+A model-generated task is recorded with that model as its author (never as
+human-authored), with the request and the session it came from.
 
-Zen's free models solve tasks in `/run-task`, but they refuse `/generate-task`
-("Free usage limit reached"): the engine sends that request as a stateless call,
-which Zen does not serve for free. Use a connected provider for `/generate-task`.
+Every session's sidebar shows a Task Factory panel:
+
+```text
+Task Factory
+toyshop @ 5cbaceb ✓
+Tasks (2)
+✓ 1 approved · ⏳ 1 review · ✗ 0
+not run yet  1
+AI performance
+resolved 100% (3/3 attempts)
+solved by all 2 · some 0 · none 0
+By model
+big-pickle            1/1 31s 24k
+deepseek-v4.1-flash   2/2 19s 12k
+This session
+1 generated · 1 valid
+✓ toyshop-5cbaceb-add-cart-total-items-002
+Next: 1 task(s) wait for review: /tasks
+```
+
+Agent errors (an exhausted quota, a bad login) are shown apart and never counted
+as a model failing a task. Zen's free models work for every command.
 
 `factory generate` also supports direct use with a compatible model provider.
 
@@ -472,7 +492,7 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works
 ```sh
 git clone https://github.com/sreenivasivbieb/task-factory && cd task-factory
 uv sync
-uv run pytest                      # 177 tests; Docker tests skip with a message if Docker is missing
+uv run pytest                      # 181 tests; Docker tests skip with a message if Docker is missing
 ```
 
 Run the whole flow on the bundled toy repo:

@@ -107,6 +107,8 @@ def draft_task(spec, drafts: Path, args, *, reply=None) -> Path:
         title, requirements = solution.get("title"), solution.get("requirements")
         if not all(isinstance(value, str) and value.strip() for value in (title, requirements)):
             raise PackageError("The model must provide a title and requirements")
+        if not requirements.lstrip().startswith("# "):  # the instruction always opens with its title
+            requirements = f"# {title.strip()}\n\n{requirements.lstrip()}"
         tests = _ask(reply,
             "Write hidden feature tests for these requirements against the baseline. "
             "Every new test should fail before the feature and pass after it. "

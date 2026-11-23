@@ -188,6 +188,8 @@ class RepairAttempt(Model):
 class GeneratedBy(Model):
     model: str = "human"  # "human" for hand-written tasks
     author: str | None = None  # who wrote or added the task, for human-authored tasks
+    session_id: str | None = None  # terminal session the task was generated in (/generate-task)
+    request: str | None = None  # the user's request that the model turned into this task
     prompt_hash: str | None = None
     seed: int | None = None
     repair_attempts: list[RepairAttempt] = Field(default_factory=list)

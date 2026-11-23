@@ -103,7 +103,7 @@ def test_bridge_reports_why_a_draft_was_rejected(monkeypatch, capsys):
 
     from factory.errors import PackageError
 
-    def rejected(request, model, reply):
+    def rejected(request, model, reply, session_id=None):
         print("NOT added: FEATURE_TESTS_FAIL_WITH_PATCH: feature tests fail with the reference patch")
         raise PackageError("Draft rejected by Task Factory.")
 
@@ -128,7 +128,7 @@ def test_only_flags_folders_or_no_args_open_the_terminal(tmp_path, monkeypatch):
 def test_bridge_stops_when_the_model_request_fails(monkeypatch, capsys):
     import io
 
-    def generate(request, model, reply):
+    def generate(request, model, reply, session_id=None):
         reply("prompt")
         raise AssertionError("must not continue after a failed model request")
 

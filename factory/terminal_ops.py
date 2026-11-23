@@ -68,7 +68,7 @@ def status(root: Path) -> dict:
     if wd.repo_spec.exists():
         spec = RepoSpec.load(wd.repo_spec)
         head = _head(root)
-        out.update(repo=spec.name, commit=spec.commit_sha, ready=wd.env_config.exists(),
+        out.update(repo=spec.name, commit=spec.commit_sha, ready=_ready(wd),
                    head_moved=bool(head and head != spec.commit_sha))
     if wd.tasks.exists():
         from .review.store import TaskStore
@@ -80,32 +80,62 @@ def status(root: Path) -> dict:
     return out
 
 
+def _ready(wd: Workdir) -> bool:
+    """Set up = an environment exists and the last inspect of the pinned commit succeeded."""
+    if not (wd.repo_spec.exists() and wd.env_config.exists()):
+        return False
+    try:
+        return json.loads(wd.inspect_result.read_text(encoding="utf-8")).get("status") == "ok"
+    except (OSError, ValueError):
+        return True  # older workdirs without inspect.json
+
+
 def setup(root: Path, force: bool = False) -> dict:
-    """Pin the project's committed HEAD and inspect it (Docker image + baseline). Idempotent."""
+    """Pin the project's committed HEAD and inspect it (Docker image + baseline). Idempotent.
+
+    The new commit is pinned and inspected in a staging folder first; only a working setup
+    replaces the current one, so a failed rebuild (e.g. no network) leaves the old setup usable.
+    """
+    import shutil
+
     from .commands import cmd_inspect
     from .repo.loader import load_repo
 
     wd = project_workdir(root)
     cfg = project_config(root)
     head = _head(root)
-    if wd.repo_spec.exists() and wd.env_config.exists() and not force:
+    if _ready(wd) and not force:
         spec = RepoSpec.load(wd.repo_spec)
         if head is None or spec.commit_sha == head:
             print(f"{spec.name}@{spec.short_sha} is already set up")
             return status(root)
         print(f"HEAD moved from {spec.short_sha} to {head[:7]}: pinning the new commit")
     print(f"pinning {root.name} and building its test environment (first time can take a few minutes)")
-    spec = load_repo(_source(root), wd.root)
+    stage = Workdir(wd.root / ".setup-staging")
+    if stage.root.exists():
+        shutil.rmtree(stage.root)
+    spec = load_repo(_source(root), stage.root)
+    spec.save(stage.repo_spec)
+    stage_cfg = cfg.model_copy(update={"workdir": str(stage.root)})
+    if cmd_inspect(argparse.Namespace(force=True, dry_run=False), stage_cfg):
+        keep = " The previous setup is unchanged." if _ready(wd) else ""
+        raise ConfigError(f"could not build a working test environment; details in {stage.inspect_result}.{keep}")
+    dest = wd.root / "repos" / spec.name
+    if dest.exists():
+        shutil.rmtree(dest)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(stage.root / "repos" / spec.name), dest)
+    spec.local_path = str(dest.resolve())
     spec.save(wd.repo_spec)
-    if cmd_inspect(argparse.Namespace(force=True, dry_run=False), cfg):
-        raise ConfigError(f"could not build a working test environment; details in {wd.inspect_result}")
+    for name in ("env_config", "inspect_result"):
+        shutil.move(str(getattr(stage, name)), getattr(wd, name))
+    shutil.rmtree(stage.root, ignore_errors=True)
     print(f"ready: {spec.name}@{spec.short_sha}")
     return status(root)
 
 
 def ensure_setup(root: Path) -> FactoryConfig:
-    wd = project_workdir(root)
-    if not (wd.repo_spec.exists() and wd.env_config.exists()):
+    if not _ready(project_workdir(root)):
         setup(root)
     return project_config(root)
 
@@ -138,6 +168,7 @@ def tasks(root: Path, status_filter: str = "all") -> list[dict]:
         if a.result is not None and a.result.reason:
             last[a.task_id] = f"{a.label}: {a.result.reason}"
     return [{"task_id": e.task_id, "title": _title(e.path), "status": e.status, "author": e.author,
+             "session_id": e.meta.generated_by.session_id,
              "kind": str(e.meta.kind.value if hasattr(e.meta.kind, "value") else e.meta.kind),
              "tests": len(e.meta.fail_to_pass), "last_result": last.get(e.task_id)}
             for e in store.entries(status_filter)]
@@ -355,3 +386,187 @@ def attempt_detail(root: Path, run_id: str, task_id: str, attempt: int) -> dict:
     if r["p2p_failed"]:
         sections.append({"heading": "Full test suite output", "text": _test_output(adir / "grade-full.json")})
     return {"title": f"{task_id} · attempt {attempt} · {verdict}", "sections": sections}
+
+
+# --------------------------------------------------------------------------- generations (per session)
+
+
+def _generations_file(wd: Workdir) -> Path:
+    return wd.root / "generations.jsonl"
+
+
+def log_generation(wd: Workdir, entry: dict) -> None:
+    """One line per /generate-task attempt, valid or not, with the session it came from."""
+    import time
+
+    wd.root.mkdir(parents=True, exist_ok=True)
+    with _generations_file(wd).open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": round(time.time(), 3), **entry}, ensure_ascii=False) + "\n")
+
+
+def generations(root: Path, session_id: str | None = None) -> list[dict]:
+    path = _generations_file(project_workdir(root))
+    if not path.exists():
+        return []
+    out = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if session_id is None or entry.get("session_id") == session_id:
+            out.append(entry)
+    return out
+
+
+def last_rejection(wd: Workdir, since: Path | None = None) -> dict:
+    """The reject code and reason of the newest validation report (the draft just checked)."""
+    reports = sorted(wd.runs.glob("*/report.json"), key=lambda p: p.stat().st_mtime, reverse=True) \
+        if wd.runs.exists() else []
+    for report in reports[:1]:
+        data = json.loads(report.read_text(encoding="utf-8"))
+        return {"reject_code": data.get("reject_code"), "reason": data.get("reject_reason"),
+                "report": str(report)}
+    return {}
+
+
+# --------------------------------------------------------------------------- performance
+
+
+def _tokens(adir: Path) -> int | None:
+    log = adir / "agent.log.json"
+    try:
+        stdout = json.loads(log.read_text(encoding="utf-8")).get("stdout") or ""
+    except (OSError, ValueError):
+        return None
+    total, seen = 0, False
+    for raw in stdout.splitlines():
+        try:
+            ev = json.loads(raw)
+        except ValueError:
+            continue
+        if ev.get("type") == "step_finish":
+            t = (ev.get("part") or {}).get("tokens") or {}
+            total += int(t.get("input") or 0) + int(t.get("output") or 0)
+            seen = True
+    return total if seen else None
+
+
+def _attempt_rows(root: Path) -> list[dict]:
+    """Every graded attempt of every run, oldest run first, with its run id and token count."""
+    from .harness.runner import INFRA_CATEGORIES
+
+    rows = []
+    for run_dir in reversed(_run_dirs(project_workdir(root))):
+        for r in _results(run_dir):
+            rows.append({**r, "run_id": run_dir.name, "infra": r.get("category") in INFRA_CATEGORIES,
+                         "tokens_total": _tokens(run_dir / r["task_id"] / f"attempt-{r['attempt']}")})
+    return rows
+
+
+def _difficulty(rows: list[dict]) -> str | None:
+    """The design doc's tag: solved by all attempts, some, or none (agent errors do not count)."""
+    graded = [r for r in rows if not r["infra"]]
+    if not graded:
+        return None
+    solved = sum(bool(r["resolved"]) for r in graded)
+    return "all" if solved == len(graded) else ("some" if solved else "none")
+
+
+def _model_stats(rows: list[dict]) -> list[dict]:
+    by: dict[str, list[dict]] = {}
+    for r in rows:
+        by.setdefault(r.get("model") or r.get("agent") or "?", []).append(r)
+    out = []
+    for model, rs in by.items():
+        graded = [r for r in rs if not r["infra"]]
+        times = [r["agent_duration_s"] for r in graded if r.get("agent_duration_s") is not None]
+        toks = [r["tokens_total"] for r in graded if r.get("tokens_total") is not None]
+        out.append({"model": model, "attempts": len(graded), "resolved": sum(bool(r["resolved"]) for r in graded),
+                    "agent_errors": len(rs) - len(graded), "tasks": len({r["task_id"] for r in rs}),
+                    "mean_time_s": round(sum(times) / len(times), 1) if times else None,
+                    "mean_tokens": round(sum(toks) / len(toks)) if toks else None})
+    return sorted(out, key=lambda m: m["model"])
+
+
+def overview(root: Path, session_id: str | None = None) -> dict:
+    """Everything the sidebar shows: project, tasks left, AI performance, per model, this session, next step."""
+    st = status(root)
+    entries = tasks(root)
+    live = [t for t in entries if t["status"] != "deleted"]
+    rows = _attempt_rows(root)
+    by_task: dict[str, list[dict]] = {}
+    for r in rows:
+        by_task.setdefault(r["task_id"], []).append(r)
+    graded = [r for r in rows if not r["infra"]]
+    difficulty = {"all": 0, "some": 0, "none": 0}
+    never_solved = []
+    for t in live:
+        d = _difficulty(by_task.get(t["task_id"], []))
+        if d:
+            difficulty[d] += 1
+        if d == "none":
+            never_solved.append(t["task_id"])
+    failures: dict[str, int] = {}
+    for r in rows:
+        if not r["resolved"]:
+            failures[r["category"]] = failures.get(r["category"], 0) + 1
+    not_run = [t["task_id"] for t in live if not any(not r["infra"] for r in by_task.get(t["task_id"], []))]
+    counts = st.get("counts", {"pending": 0, "approved": 0, "deleted": 0})
+    session = generations(root, session_id) if session_id else []
+    if not st.get("ready"):
+        nxt = "/setup to prepare this project"
+    elif st.get("head_moved"):
+        nxt = "HEAD moved: /setup to pin the new commit"
+    elif not live:
+        nxt = "/generate-task to make the first task"
+    elif counts.get("pending"):
+        nxt = f"{counts['pending']} task(s) wait for review: /tasks"
+    elif not_run:
+        nxt = f"{len(not_run)} task(s) never run: /run-task"
+    elif never_solved:
+        nxt = f"{len(never_solved)} task(s) no model solved: check they are solvable (/benchmark)"
+    else:
+        nxt = "/benchmark to compare models, or /generate-task for more tasks"
+    return {
+        "project": {k: st.get(k) for k in ("repo", "commit", "ready", "head_moved")},
+        "tasks": {**counts, "total": len(entries), "not_run": len(not_run), "never_solved": len(never_solved),
+                  "open_assignments": st.get("open_assignments", 0)},
+        "performance": {"attempts": len(graded), "resolved": sum(bool(r["resolved"]) for r in graded),
+                        "agent_errors": len(rows) - len(graded), "difficulty": difficulty, "failures": failures},
+        "models": _model_stats(rows),
+        "session": {"made": len(session), "valid": sum(g.get("verdict") == "valid" for g in session),
+                    "items": [{k: g.get(k) for k in ("request", "verdict", "task_id", "reject_code", "reason", "model")}
+                              for g in session[-8:]]},
+        "next": nxt,
+    }
+
+
+def benchmark(root: Path) -> dict:
+    """Tasks x models: per cell the attempts and how many resolved; the doc's difficulty per task; totals."""
+    entries = {t["task_id"]: t for t in tasks(root)}
+    rows = _attempt_rows(root)
+    models = sorted({r.get("model") or r.get("agent") or "?" for r in rows})
+    task_ids = [t for t in entries if entries[t]["status"] != "deleted"]
+    task_ids += sorted({r["task_id"] for r in rows} - set(task_ids))
+    matrix = []
+    for task_id in task_ids:
+        mine = [r for r in rows if r["task_id"] == task_id]
+        cells = {}
+        for model in models:
+            rs = [r for r in mine if (r.get("model") or r.get("agent") or "?") == model]
+            if not rs:
+                continue
+            graded = [r for r in rs if not r["infra"]]
+            last = rs[-1]
+            cells[model] = {"attempts": len(graded), "resolved": sum(bool(r["resolved"]) for r in graded),
+                            "agent_errors": len(rs) - len(graded), "category": last["category"],
+                            "run_id": last["run_id"], "attempt": last["attempt"]}
+        t = entries.get(task_id, {})
+        matrix.append({"task_id": task_id, "title": t.get("title", task_id), "status": t.get("status", "?"),
+                       "difficulty": _difficulty(mine), "cells": cells})
+    failures: dict[str, int] = {}
+    for r in rows:
+        if not r["resolved"]:
+            failures[r["category"]] = failures.get(r["category"], 0) + 1
+    return {"models": _model_stats(rows), "matrix": matrix, "failures": failures}

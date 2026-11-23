@@ -171,6 +171,19 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   commands. Hidden, not deleted: a typed command or its keybind still works, and the engine's
   source stays a plain patch of upstream. `/plugins` is hidden because turning the Task Factory
   plugin off from there would remove our commands.
+- **D53 Sessions show the project's state; generation runs in its own session** (user decisions,
+  2026-11-23). The sidebar of every session shows tasks (by status, not run yet, never solved),
+  AI performance (resolve rate over graded attempts, the doc's difficulty tag, failure
+  categories), per model (resolved/attempts, mean time, mean tokens, agent errors apart), what
+  this session generated (valid or rejected with the gate), and the next step. `/benchmark` is
+  the tasks × models matrix (the doc says no leaderboard, so it is framed as task difficulty, not
+  a ranking). `/generate-task` runs in a separate, top-level, read-only session: tried first as a
+  child session, the engine delivered the child's failure to the parent session, whose Build
+  agent then implemented the task in the user's repo by itself. Each task records the request
+  and the session it was made for (`generated_by.session_id`, `request`); every attempt, valid
+  or not, goes to `generations.jsonl`. `/setup` pins and inspects a new commit in a staging
+  folder and keeps the working setup when that fails (seen live: PyPI unreachable). Generated
+  requirements always open with `# <title>`.
 
 ## Limitations
 
@@ -205,7 +218,7 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   today tasks are written by people or drafted from a prompt (`/generate-task`, `factory generate`).
 - L13 A task can only depend on what the base image has: dependencies are installed at build
   time, and the grader restores build files, so a task that needs a new dependency cannot pass.
-- L14 `/generate-task` cannot use Zen's free models: the engine's `generate.text` is a stateless
-  request without the client/session headers of a normal session, and Zen answers "Free usage
-  limit reached" (the same models work in `/run-task`). We do not fake those headers.
+- L14 (resolved by D53) `/generate-task` first used the engine's stateless `generate.text`, which
+  Zen's free models refuse ("Free usage limit reached"); a session with every tool denied is
+  refused the same way. A read-only agent session works. We never fake client headers.
 

@@ -8,6 +8,7 @@ edit with its reason.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import shutil
@@ -121,7 +122,10 @@ def add_task(draft_dir: Path, spec: RepoSpec, env: EnvConfig, factory: SandboxFa
     # A draft written by a model (task.json "model", e.g. from /generate-task) keeps that model as its
     # author, so AI-made tasks are never reported as human-authored.
     model = meta.get("model") or "human"
-    draft.generated_by = GeneratedBy(model=model, author=author or meta.get("author") or store.reviewer)
+    request = meta.get("request")
+    draft.generated_by = GeneratedBy(
+        model=model, author=author or meta.get("author") or store.reviewer, session_id=meta.get("session_id"),
+        request=request, prompt_hash=hashlib.sha256(request.encode()).hexdigest()[:16] if request else None)
     report = Validator(factory, spec, env, cfg.gates, log_dir=log_dir).validate(draft)
     if report.verdict != "valid":
         return AddResult(report, draft, None)

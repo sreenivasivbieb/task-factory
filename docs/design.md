@@ -966,7 +966,7 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 
 ## 17. How it is tested
 
-There are 177 tests. Unit tests use two small fixture repositories that are rich
+There are 181 tests. Unit tests use two small fixture repositories that are rich
 enough to show real failure modes:
 
 | Fixture | Contents |

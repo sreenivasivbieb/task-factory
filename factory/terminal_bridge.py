@@ -53,8 +53,11 @@ def select_context(root: Path, request: str) -> list[str]:
     return files
 
 
-def generate(request: str, model: str, reply) -> None:
-    """Draft a task with the terminal's model, validate it, and add it to the project's store as pending."""
+def generate(request: str, model: str, reply, session_id: str | None = None) -> None:
+    """Draft a task with the terminal's model, validate it, and add it to the project's store as pending.
+
+    Every attempt, valid or not, is logged for the session it came from (``generations.jsonl``).
+    """
     from .commands import cmd_tasks_add
     from .generation.author import draft_task
     from .models import RepoSpec
@@ -63,15 +66,31 @@ def generate(request: str, model: str, reply) -> None:
     cfg = ops.ensure_setup(root)
     wd = Workdir(cfg.workdir)
     spec = RepoSpec.load(wd.repo_spec)
+    entry = {"session_id": session_id, "model": model, "request": request, "verdict": "error"}
     args = argparse.Namespace(
         model=model, prompt=request, file=select_context(Path(spec.local_path), request),
         force=False, dry_run=False, pending=True, store=None, author=f"terminal:{model}",
     )
-    print(f"asking {model} for a task on {spec.name}@{spec.short_sha}")
-    args.draft = draft_task(spec, wd.drafts, args, reply=reply)
-    print("validating the draft in Docker (gates G0-G6)")
-    if cmd_tasks_add(args, cfg):
-        raise PackageError(f"Draft rejected by Task Factory. Draft: {args.draft}")
+    try:
+        print(f"asking {model} for a task on {spec.name}@{spec.short_sha}")
+        args.draft = draft_task(spec, wd.drafts, args, reply=reply)
+        entry["draft"] = str(args.draft)
+        meta_file = args.draft / "task.json"
+        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+        meta.update(session_id=session_id, request=request)
+        meta_file.write_text(json.dumps(meta), encoding="utf-8")
+        print("validating the draft in Docker (gates G0-G6)")
+        before = {t["task_id"] for t in ops.tasks(root)}
+        if cmd_tasks_add(args, cfg):
+            entry.update(ops.last_rejection(wd, args.draft), verdict="rejected")
+            raise PackageError(f"Draft rejected by Task Factory. Draft: {args.draft}")
+        new = [t for t in ops.tasks(root) if t["task_id"] not in before]
+        entry.update(verdict="valid", task_id=new[0]["task_id"] if new else None)
+    except FactoryError as exc:
+        entry.setdefault("reason", str(exc))
+        raise
+    finally:
+        ops.log_generation(wd, entry)
     print("saved as pending: open /tasks to review it, or /run-task to try a model on it")
     print(f"(terminal: factory tasks list --workdir {shlex.quote(str(wd.root))})")
 
@@ -81,7 +100,7 @@ def handle(request: dict, reply):
     op = request.get("op", "generate")
     root = ops.project_root()
     if op == "generate":
-        generate(request["request"], request["model"], reply)
+        generate(request["request"], request["model"], reply, request.get("session_id"))
         return None
     if op == "status":
         return ops.status(root)
@@ -100,6 +119,10 @@ def handle(request: dict, reply):
         return ops.run(root, list(request["task_ids"]), request["model"])
     if op == "runs":
         return ops.runs(root)
+    if op == "overview":
+        return ops.overview(root, request.get("session_id"))
+    if op == "benchmark":
+        return ops.benchmark(root)
     if op == "attempts":
         return ops.attempts(root, request["run_id"])
     if op == "attempt":

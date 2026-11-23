@@ -188,3 +188,80 @@ def test_bridge_streams_progress_and_returns_data(project, monkeypatch, capsys):
     terminal_bridge.main()
     last = json.loads(capsys.readouterr().out.splitlines()[-1])
     assert not last["ok"] and "unknown request" in last["text"]
+
+
+def test_failed_setup_keeps_the_working_one(project, monkeypatch, capsys):
+    import subprocess
+
+    first = terminal_ops.setup(project)
+    (project / "NEW.md").write_text("x\n")
+    subprocess.run(["git", "add", "-A"], cwd=project, check=True)
+    subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "more"], cwd=project, check=True)
+    monkeypatch.setattr("factory.commands.cmd_inspect", lambda args, cfg: 2)  # e.g. no network for pip
+    with pytest.raises(ConfigError, match="previous setup is unchanged"):
+        terminal_ops.setup(project)
+    st = terminal_ops.status(project)
+    assert st["ready"] and st["commit"] == first["commit"] and st["head_moved"]
+    spec = json.loads(terminal_ops.project_workdir(project).repo_spec.read_text())
+    assert Path(spec["local_path"]).exists() and ".setup-staging" not in spec["local_path"]
+
+
+def test_generated_task_is_linked_to_its_session(project, tmp_path):
+    fixture = GOOD
+    replies = iter([
+        json.dumps({"title": "Bulk discount", "requirements": (fixture / "requirements.md").read_text(),
+                    "after": {"toyshop/pricing.py": (fixture / "after/toyshop/pricing.py").read_text()}}),
+        json.dumps({"tests": {"tests/test_bulk_discount.py": (fixture / "tests/tests/test_bulk_discount.py").read_text()}}),
+        json.dumps({"title": "Same again", "requirements": "x", "after": {"toyshop/pricing.py": "broken("}}),
+        json.dumps({"tests": {"tests/test_x.py": "def test_x():\n    assert False\n"}}),
+    ])
+    terminal_bridge.generate("Add bulk discounts", "zen/free", lambda _: next(replies), "ses_A")
+    with pytest.raises(Exception, match="rejected"):
+        terminal_bridge.generate("Break it", "zen/free", lambda _: next(replies), "ses_A")
+    (task,) = terminal_ops.tasks(project)
+    assert task["session_id"] == "ses_A" and task["author"] == "zen/free"
+    store = terminal_ops._store(project)
+    gb = store.get(task["task_id"]).meta.generated_by
+    assert gb.request == "Add bulk discounts" and gb.prompt_hash
+    made = terminal_ops.generations(project, "ses_A")
+    assert [g["verdict"] for g in made] == ["valid", "rejected"]
+    assert made[0]["task_id"] == task["task_id"] and made[1]["reject_code"]
+    assert terminal_ops.generations(project, "ses_B") == []
+    o = terminal_ops.overview(project, "ses_A")
+    assert o["session"]["made"] == 2 and o["session"]["valid"] == 1
+    assert o["tasks"]["pending"] == 1 and o["tasks"]["not_run"] == 1
+    assert o["next"].startswith("1 task(s) wait for review")
+
+
+def test_overview_and_benchmark_from_runs(project):
+    terminal_ops.setup(project)
+    task_id = _add_good_task(project)
+    wd = terminal_ops.project_workdir(project)
+
+    def run(run_id, model, attempts):
+        d = wd.harness / run_id
+        d.mkdir(parents=True)
+        lines = []
+        for i, (resolved, category) in enumerate(attempts, 1):
+            a = d / task_id / f"attempt-{i}"
+            a.mkdir(parents=True)
+            (a / "agent.log.json").write_text(json.dumps(AGENT_LOG))
+            lines.append(json.dumps({"task_id": task_id, "agent": "task-factory", "model": model, "attempt": i,
+                                     "resolved": resolved, "category": category, "agent_duration_s": 10.0}))
+        (d / "results.jsonl").write_text("\n".join(lines) + "\n")
+
+    run("20261123-100000-task-factory", "zen/a", [(True, "resolved"), (False, "wrong_behaviour")])
+    run("20261123-110000-task-factory", "zen/b", [(False, "agent_error")])
+    o = terminal_ops.overview(project)
+    assert o["performance"] == {"attempts": 2, "resolved": 1, "agent_errors": 1,
+                                "difficulty": {"all": 0, "some": 1, "none": 0},
+                                "failures": {"wrong_behaviour": 1, "agent_error": 1}}
+    a, b = o["models"]
+    assert (a["model"], a["resolved"], a["attempts"], a["mean_tokens"]) == ("zen/a", 1, 2, 107)
+    assert (b["attempts"], b["agent_errors"]) == (0, 1)  # a quota error is not a failure of the model
+    bench = terminal_ops.benchmark(project)
+    (row,) = bench["matrix"]
+    assert row["difficulty"] == "some"
+    assert row["cells"]["zen/a"]["resolved"] == 1 and row["cells"]["zen/a"]["attempts"] == 2
+    assert row["cells"]["zen/b"] == {"attempts": 0, "resolved": 0, "agent_errors": 1, "category": "agent_error",
+                                     "run_id": "20261123-110000-task-factory", "attempt": 1}
