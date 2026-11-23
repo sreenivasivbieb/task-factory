@@ -514,6 +514,7 @@ def overview(root: Path, session_id: str | None = None) -> dict:
     not_run = [t["task_id"] for t in live if not any(not r["infra"] for r in by_task.get(t["task_id"], []))]
     counts = st.get("counts", {"pending": 0, "approved": 0, "deleted": 0})
     session = generations(root, session_id) if session_id else []
+    titles = {t["task_id"]: t["title"] for t in entries}
     if not st.get("ready"):
         nxt = "/setup to prepare this project"
     elif st.get("head_moved"):
@@ -536,8 +537,9 @@ def overview(root: Path, session_id: str | None = None) -> dict:
                         "agent_errors": len(rows) - len(graded), "difficulty": difficulty, "failures": failures},
         "models": _model_stats(rows),
         "session": {"made": len(session), "valid": sum(g.get("verdict") == "valid" for g in session),
-                    "items": [{k: g.get(k) for k in ("request", "verdict", "task_id", "reject_code", "reason", "model")}
-                              for g in session[-8:]]},
+                    "items": [{**{k: g.get(k) for k in ("request", "verdict", "task_id", "reject_code", "reason",
+                                                         "model")},
+                               "title": titles.get(g.get("task_id"))} for g in session[-8:]]},
         "next": nxt,
     }
 

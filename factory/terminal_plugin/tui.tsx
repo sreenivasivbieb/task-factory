@@ -15,9 +15,80 @@ import { useTerminalDimensions } from "@opentui/solid"
 import { createEffect, createSignal, For, onCleanup, Show } from "solid-js"
 import { Plugin } from "@task-factory/plugin/tui"
 
-type Section = { heading: string; text: string }
+type Tone = "base" | "muted" | "faint" | "ok" | "bad" | "warn" | "info" | "add" | "del" | "hunk"
+type Seg = { text: string; tone?: Tone; bold?: boolean }
+type Section = { heading: string; text?: string; lines?: Seg[][] }
 type Action = { key: string; title: string; run: () => void }
-type View = { title: string; sections: Section[]; log: string[]; running: boolean; footer?: string; actions?: Action[] }
+type View = {
+  title: string
+  sections: Section[]
+  log: string[]
+  running: boolean
+  footer?: string
+  ok?: boolean // colours the footer and the title once the command has finished
+  started?: number
+  actions?: Action[]
+}
+
+const color = (theme: any, tone: Tone = "base") =>
+  ({
+    base: theme.text.base,
+    muted: theme.text.muted,
+    faint: theme.text.faint ?? theme.text.muted,
+    ok: theme.text.feedback.success.base,
+    bad: theme.text.feedback.error.base,
+    warn: theme.text.feedback.warning.base,
+    info: theme.text.feedback.info.base,
+    add: theme.diff.text.added,
+    del: theme.diff.text.removed,
+    hunk: theme.diff.text.hunkHeader,
+  })[tone]
+
+// One tone per line, from what the line says. `kind` comes from the section heading.
+function toneOf(line: string, kind: "diff" | "agent" | "plain" | "text"): Seg {
+  if (kind === "text") return { text: line, tone: line.startsWith("#") ? "base" : "muted", bold: line.startsWith("#") }
+  if (kind === "diff") {
+    if (/^(\+\+\+|---) /.test(line)) return { text: line, tone: "faint" }
+    if (line.startsWith("@@")) return { text: line, tone: "hunk" }
+    if (line.startsWith("+")) return { text: line, tone: "add" }
+    if (line.startsWith("-")) return { text: line, tone: "del" }
+    return { text: line, tone: "muted" }
+  }
+  if (kind === "agent") {
+    if (line.startsWith("● ")) return { text: line, tone: "base", bold: true }
+    if (line.startsWith("✓ ")) return { text: line, tone: "ok" }
+    if (line.startsWith("✗ ") || line.startsWith("ERROR")) return { text: line, tone: "bad" }
+    if (line.startsWith("    ")) return { text: line, tone: "faint" }
+    return { text: line, tone: "muted" }
+  }
+  if (/^\s*G\d\s+fail|✗|\bERROR\b|\berror:|rejected|NOT added|REJECT|\bFAILED\b|[1-9]\d* failed|timed out|stopped early|verdict: (?!RESOLVED)/.test(line))
+    return { text: line, tone: "bad" }
+  if (/⚠|WARNING|warning|kept open|not attempted|HEAD moved|still working/i.test(line)) return { text: line, tone: "warn" }
+  if (/^\s*G\d\s+pass|✓|RESOLVED|\bresolved\b|\bvalid\b|^ready:|new branch|environment ok|\d+ passed|saved as pending|^Done\.?$/.test(line))
+    return { text: line, tone: "ok" }
+  return { text: line, tone: "muted" }
+}
+
+function sectionKind(heading: string): "diff" | "agent" | "plain" | "text" {
+  if (/instruction|history|how to read/i.test(heading)) return "text"
+  if (/diff|change/i.test(heading)) return "diff"
+  if (/session/i.test(heading)) return "agent"
+  return "plain"
+}
+
+function Line(props: { theme: any; segs: Seg[] }) {
+  return (
+    <text fg={props.theme.text.muted} wrapMode="word">
+      <For each={props.segs}>
+        {(seg) => (
+          <span style={{ fg: color(props.theme, seg.tone), attributes: seg.bold ? TextAttributes.BOLD : undefined }}>
+            {seg.text}
+          </span>
+        )}
+      </For>
+    </text>
+  )
+}
 type Result = { ok: boolean; text: string; error?: string; data?: any }
 
 const PAGE = "task-factory"
@@ -77,6 +148,15 @@ function Page(props: { context: any; view: () => View; onClose: () => void }) {
   const dimensions = useTerminalDimensions()
   let scroll: ScrollBoxRenderable | undefined
   const page = () => Math.max(3, dimensions().height - 6)
+  const [now, setNow] = createSignal(Date.now())
+  const tick = setInterval(() => props.view().running && setNow(Date.now()), 1000)
+  onCleanup(() => clearInterval(tick))
+  const elapsed = () => {
+    const start = props.view().started
+    if (!start) return ""
+    const s = Math.max(0, Math.round((now() - start) / 1000))
+    return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`
+  }
   props.context.keymap.layer(() => ({
     commands: [
       { bind: "escape", title: "back", run: props.onClose },
@@ -89,14 +169,23 @@ function Page(props: { context: any; view: () => View; onClose: () => void }) {
       ...(props.view().actions ?? []).map((a) => ({ bind: a.key, title: a.title, run: a.run })),
     ],
   }))
+  const titleTone = (): Tone => {
+    const v = props.view()
+    if (v.running) return "warn"
+    if (v.ok === false || / · (?!RESOLVED)[A-Z ]+$/.test(v.title)) return "bad"
+    if (v.ok === true || / · RESOLVED$/.test(v.title)) return "ok"
+    return "base"
+  }
   return (
     <box width="100%" height="100%" backgroundColor={theme.background.base} padding={1} gap={1}>
       <box flexDirection="row" justifyContent="space-between" flexShrink={0}>
         <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
-          Task Factory · {props.view().title}
+          Task Factory · <span style={{ fg: color(theme, titleTone()) }}>{props.view().title}</span>
         </text>
         <text fg={theme.text.muted}>
-          {props.view().running ? "working…  " : ""}
+          <Show when={props.view().running}>
+            <span style={{ fg: color(theme, "warn") }}>● working {elapsed()}{"  "}</span>
+          </Show>
           {(props.view().actions ?? []).map((a) => `${a.key} ${a.title} · `).join("")}esc back · ↑↓ pgup pgdn scroll
         </text>
       </box>
@@ -111,22 +200,22 @@ function Page(props: { context: any; view: () => View; onClose: () => void }) {
           <For each={props.view().sections}>
             {(section) => (
               <box>
-                <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
+                <text fg={color(theme, "info")} attributes={TextAttributes.BOLD}>
                   {section.heading}
                 </text>
-                <text fg={theme.text.base} wrapMode="word">
-                  {section.text}
-                </text>
+                <For each={section.lines ?? (section.text ?? "").split("\n").map((l) => [toneOf(l, sectionKind(section.heading))])}>
+                  {(segs) => <Line theme={theme} segs={segs} />}
+                </For>
               </box>
             )}
           </For>
           <Show when={props.view().log.length > 0}>
-            <text fg={theme.text.muted} wrapMode="word">
-              {props.view().log.join("\n")}
-            </text>
+            <box>
+              <For each={props.view().log}>{(line) => <Line theme={theme} segs={[toneOf(line, "plain")]} />}</For>
+            </box>
           </Show>
           <Show when={props.view().footer}>
-            <text fg={theme.text.base} wrapMode="word">
+            <text fg={color(theme, props.view().ok === false ? "bad" : "ok")} attributes={TextAttributes.BOLD} wrapMode="word">
               {props.view().footer}
             </text>
           </Show>
@@ -137,68 +226,112 @@ function Page(props: { context: any; view: () => View; onClose: () => void }) {
 }
 
 const pct = (n: number, d: number) => (d ? `${Math.round((100 * n) / d)}%` : "–")
-const short = (model: string) => model.replace(/^[^/]+\//, "").replace(/-free$/, "").slice(0, 20)
+const short = (model: string) => model.replace(/^[^/]+\//, "").replace(/-free$/, "").slice(0, 22)
+const fit = (text: string, n = 34) => (text.length > n ? text.slice(0, n - 1) + "…" : text)
 
 function Sidebar(props: { context: any; overview: () => any; running: () => string | undefined }) {
   const theme = props.context.theme
-  const line = (text: string) => <text fg={theme.text.muted}>{text}</text>
+  const head = (text: string) => (
+    <text fg={theme.text.base} attributes={TextAttributes.BOLD}>
+      {text}
+    </text>
+  )
+  const row = (segs: Seg[]) => <Line theme={theme} segs={segs} />
+  const rateTone = (n: number, d: number): Tone => (!d ? "faint" : n / d >= 0.5 ? "ok" : n ? "warn" : "bad")
   return (
     <Show when={props.overview()}>
       {(o: () => any) => (
         <box>
-          <text fg={theme.text.base}>
-            <b>Task Factory</b>
-          </text>
-          {line(
-            o().project.repo
-              ? `${o().project.repo} @ ${String(o().project.commit).slice(0, 7)} ${o().project.ready ? (o().project.head_moved ? "⚠ HEAD moved" : "✓") : "· not set up"}`
-              : "not set up: /setup",
+          {head("Task Factory")}
+          {row(
+            !o().project.repo
+              ? [{ text: "not set up · /setup", tone: "warn" }]
+              : [
+                  { text: `${o().project.repo} @ ${String(o().project.commit).slice(0, 7)} `, tone: "muted" },
+                  o().project.ready
+                    ? o().project.head_moved
+                      ? { text: "⚠ HEAD moved", tone: "warn" }
+                      : { text: "✓", tone: "ok" }
+                    : { text: "not ready", tone: "bad" },
+                ],
           )}
           <Show when={o().tasks.total > 0}>
-            <text fg={theme.text.base}>Tasks ({o().tasks.total})</text>
-            {line(`✓ ${o().tasks.approved} approved · ⏳ ${o().tasks.pending} review · ✗ ${o().tasks.deleted}`)}
-            <Show when={o().tasks.not_run}>{line(`not run yet  ${o().tasks.not_run}`)}</Show>
-            <Show when={o().tasks.never_solved}>{line(`never solved ${o().tasks.never_solved} ⚠ check solvable`)}</Show>
-            <Show when={o().tasks.open_assignments}>{line(`assigned     ${o().tasks.open_assignments} open`)}</Show>
-          </Show>
-          <Show when={o().performance.attempts + o().performance.agent_errors > 0}>
-            <text fg={theme.text.base}>AI performance</text>
-            {line(`resolved ${pct(o().performance.resolved, o().performance.attempts)} (${o().performance.resolved}/${o().performance.attempts} attempts)`)}
-            {line(`solved by all ${o().performance.difficulty.all} · some ${o().performance.difficulty.some} · none ${o().performance.difficulty.none}`)}
-            <Show when={Object.keys(o().performance.failures).length}>
-              {line(Object.entries(o().performance.failures).map(([k, v]) => `${k} ${v}`).join(" · "))}
+            {head(`Tasks (${o().tasks.total})`)}
+            {row([
+              { text: `✓ ${o().tasks.approved} approved`, tone: o().tasks.approved ? "ok" : "faint" },
+              { text: " · ", tone: "faint" },
+              { text: `⏳ ${o().tasks.pending} review`, tone: o().tasks.pending ? "warn" : "faint" },
+              { text: " · ", tone: "faint" },
+              { text: `✗ ${o().tasks.deleted}`, tone: "faint" },
+            ])}
+            <Show when={o().tasks.not_run}>{row([{ text: `not run yet  ${o().tasks.not_run}`, tone: "warn" }])}</Show>
+            <Show when={o().tasks.never_solved}>
+              {row([{ text: `never solved ${o().tasks.never_solved} ⚠ check solvable`, tone: "bad" }])}
+            </Show>
+            <Show when={o().tasks.open_assignments}>
+              {row([{ text: `assigned     ${o().tasks.open_assignments} open`, tone: "muted" }])}
             </Show>
           </Show>
+          <Show when={o().performance.attempts + o().performance.agent_errors > 0}>
+            {head("AI performance")}
+            {row([
+              { text: "resolved ", tone: "muted" },
+              {
+                text: `${pct(o().performance.resolved, o().performance.attempts)}`,
+                tone: rateTone(o().performance.resolved, o().performance.attempts),
+                bold: true,
+              },
+              { text: ` (${o().performance.resolved}/${o().performance.attempts} attempts)`, tone: "muted" },
+            ])}
+            {row([
+              { text: "solved by ", tone: "muted" },
+              { text: `all ${o().performance.difficulty.all}`, tone: o().performance.difficulty.all ? "ok" : "faint" },
+              { text: " · ", tone: "faint" },
+              { text: `some ${o().performance.difficulty.some}`, tone: o().performance.difficulty.some ? "warn" : "faint" },
+              { text: " · ", tone: "faint" },
+              { text: `none ${o().performance.difficulty.none}`, tone: o().performance.difficulty.none ? "bad" : "faint" },
+            ])}
+            <For each={Object.entries(o().performance.failures)}>
+              {([k, v]: [string, any]) => row([{ text: `${k} ${v}`, tone: k === "agent_error" ? "warn" : "bad" }])}
+            </For>
+          </Show>
           <Show when={o().models.length}>
-            <text fg={theme.text.base}>By model</text>
+            {head("By model")}
             <For each={o().models}>
               {(m: any) =>
-                line(
-                  `${short(m.model).padEnd(20)} ${m.resolved}/${m.attempts}` +
-                    (m.mean_time_s != null ? ` ${Math.round(m.mean_time_s)}s` : "") +
-                    (m.mean_tokens != null ? ` ${Math.round(m.mean_tokens / 1000)}k` : "") +
-                    (m.agent_errors ? ` ⚠${m.agent_errors}` : ""),
-                )
+                row([
+                  { text: fit(short(m.model), 20).padEnd(21), tone: "muted" },
+                  { text: `${m.resolved}/${m.attempts}`, tone: rateTone(m.resolved, m.attempts), bold: true },
+                  {
+                    text:
+                      (m.mean_time_s != null ? ` ${Math.round(m.mean_time_s)}s` : "") +
+                      (m.mean_tokens != null ? ` ${Math.round(m.mean_tokens / 1000)}k` : ""),
+                    tone: "faint",
+                  },
+                  ...(m.agent_errors ? [{ text: ` ⚠${m.agent_errors}`, tone: "warn" as Tone }] : []),
+                ])
               }
             </For>
           </Show>
           <Show when={o().session.made}>
-            <text fg={theme.text.base}>This session</text>
-            {line(`${o().session.made} generated · ${o().session.valid} valid`)}
+            {head("This session")}
+            {row([{ text: `${o().session.made} generated · ${o().session.valid} valid`, tone: "muted" }])}
             <For each={o().session.items}>
               {(g: any) =>
-                line(
-                  g.verdict === "valid"
-                    ? `✓ ${g.task_id ?? g.request}`
-                    : `✗ ${String(g.request).slice(0, 22)} · ${g.reject_code ?? g.verdict}`,
-                )
+                g.verdict === "valid"
+                  ? row([{ text: "✓ " + fit(g.title ?? g.task_id ?? g.request, 32), tone: "ok" }])
+                  : row([
+                      { text: "✗ " + fit(String(g.request), 20), tone: "bad" },
+                      { text: ` ${g.reject_code ?? g.verdict}`, tone: "faint" },
+                    ])
               }
             </For>
           </Show>
-          <Show when={props.running()}>
-            <text fg={theme.text.base}>● {props.running()}</text>
-          </Show>
-          <text fg={theme.text.base}>Next: {o().next}</text>
+          <Show when={props.running()}>{row([{ text: `● ${fit(String(props.running()), 32)}`, tone: "warn" }])}</Show>
+          {row([
+            { text: "Next: ", tone: "info", bold: true },
+            { text: o().next, tone: "info" },
+          ])}
         </box>
       )}
     </Show>
@@ -211,6 +344,7 @@ export default Plugin.define({
     const python = context.options.python
     const [view, setView] = createSignal<View>({ title: "", sections: [], log: [], running: false })
     const [previous, setPrevious] = createSignal<any>({ type: "home" })
+    const back: View[] = [] // pages opened from another Task Factory page; esc returns to them
     let busy: string | undefined // the command running in the live view, if any
     const [running, setRunning] = createSignal<string | undefined>()
     const [version, setVersion] = createSignal(0) // bumped after every command, so the sidebar refreshes
@@ -222,7 +356,17 @@ export default Plugin.define({
 
     context.ui.router.register({
       name: PAGE,
-      render: () => <Page context={context} view={view} onClose={() => context.ui.router.navigate(previous())} />,
+      render: () => (
+        <Page
+          context={context}
+          view={view}
+          onClose={() => {
+            const last = back.pop()
+            if (last) setView(last)
+            else context.ui.router.navigate(previous())
+          }}
+        />
+      ),
     })
 
     const project = () => {
@@ -230,10 +374,15 @@ export default Plugin.define({
       const session = route.type === "session" ? context.data.session.get(route.sessionID) : undefined
       return (session?.location ?? context.location ?? context.data.location.default()).directory
     }
-    const open = (next: View) => {
-      setView(next)
+    const open = (next: View, keepBack = false) => {
       const current = context.ui.router.current()
-      if (!(current.type === "plugin" && current.name === PAGE)) setPrevious({ ...current })
+      const onPage = current.type === "plugin" && current.name === PAGE
+      if (!onPage) {
+        setPrevious({ ...current })
+        back.length = 0
+      } else if (keepBack && !view().running) back.push(view())
+      else if (!keepBack) back.length = 0
+      setView(next)
       context.ui.dialog.clear()
       context.ui.router.navigate({ type: "plugin", name: PAGE })
     }
@@ -304,17 +453,17 @@ export default Plugin.define({
       }
       busy = title
       setRunning(title)
-      open({ title, sections: [], log: [], running: true })
+      open({ title, sections: [], log: [], running: true, started: Date.now() })
       try {
         const result = await callBridge(python, project(), request, {
           ...extra,
           progress: (line) => setView((v) => ({ ...v, log: [...v.log, line] })),
         })
-        setView((v) => ({ ...v, running: false, footer: result.ok ? "Done." : result.error ?? result.text }))
+        setView((v) => ({ ...v, running: false, ok: result.ok, footer: result.ok ? "Done." : result.error ?? result.text }))
         context.attention?.notify?.({ title: "Task Factory", message: `${title}: ${result.ok ? "done" : "failed"}` })
         return result
       } catch (error) {
-        setView((v) => ({ ...v, running: false, footer: String(error instanceof Error ? error.message : error) }))
+        setView((v) => ({ ...v, running: false, ok: false, footer: String(error instanceof Error ? error.message : error) }))
         return undefined
       } finally {
         busy = undefined
@@ -345,28 +494,46 @@ export default Plugin.define({
       return context.ui.dialog.select({ title: "Solve with which model?", placeholder: "Search models", options, current })
     }
 
-    const showDoc = (doc: { title: string; sections: Section[] }) => open({ ...doc, log: [], running: false })
+    const showDoc = (doc: { title: string; sections: Section[] }, keepBack = false) =>
+      open({ ...doc, log: [], running: false }, keepBack)
 
     const mark = (c: any) =>
       !c ? "–" : c.attempts === 0 ? "err" : c.resolved === c.attempts ? `✓${c.attempts > 1 ? c.attempts : ""}` : c.resolved ? `${c.resolved}/${c.attempts}` : "✗"
     const showBenchmark = (b: any) => {
       const models: string[] = b.models.map((m: any) => m.model)
-      const col = (t: string) => t.slice(0, 12).padEnd(13)
+      const widths = models.map((m) => Math.max(6, short(m).length) + 2)
       const width = Math.min(44, Math.max(10, ...b.matrix.map((r: any) => r.task_id.length)))
-      const header = "task".padEnd(width + 2) + models.map((m) => col(short(m))).join("") + "solved by"
-      const rows = b.matrix.map(
-        (r: any) =>
-          r.task_id.slice(0, width).padEnd(width + 2) +
-          models.map((m) => col(mark(r.cells[m]))).join("") +
-          (r.difficulty ? (r.difficulty === "none" ? "none ⚠" : r.difficulty) : "not run"),
-      )
-      const perModel = b.models.map(
-        (m: any) =>
-          `${m.model}: ${m.resolved}/${m.attempts} resolved (${pct(m.resolved, m.attempts)}) on ${m.tasks} task(s)` +
-          (m.mean_time_s != null ? ` · ${m.mean_time_s}s avg` : "") +
-          (m.mean_tokens != null ? ` · ${m.mean_tokens.toLocaleString()} tokens avg` : "") +
-          (m.agent_errors ? ` · ${m.agent_errors} agent error(s), not counted` : ""),
-      )
+      const cellTone = (c: any): Tone =>
+        !c ? "faint" : c.attempts === 0 ? "warn" : c.resolved === c.attempts ? "ok" : c.resolved ? "warn" : "bad"
+      const diffTone = (d?: string): Tone => (d === "all" ? "ok" : d === "some" ? "warn" : d === "none" ? "bad" : "faint")
+      const header: Seg[] = [
+        { text: "task".padEnd(width + 2), tone: "base", bold: true },
+        ...models.map((m, i) => ({ text: short(m).padEnd(widths[i]), tone: "base" as Tone, bold: true })),
+        { text: "solved by", tone: "base", bold: true },
+      ]
+      const rows: Seg[][] = b.matrix.map((r: any) => [
+        { text: r.task_id.slice(0, width).padEnd(width + 2), tone: r.status === "deleted" ? "faint" : "base" },
+        ...models.map((m, i) => ({ text: mark(r.cells[m]).padEnd(widths[i]), tone: cellTone(r.cells[m]) })),
+        {
+          text: r.difficulty ? (r.difficulty === "none" ? "none ⚠" : r.difficulty) : "not run",
+          tone: diffTone(r.difficulty),
+        },
+      ])
+      const perModel: Seg[][] = b.models.map((m: any) => [
+        { text: `${short(m.model).padEnd(22)}`, tone: "base", bold: true },
+        {
+          text: `${m.resolved}/${m.attempts} resolved (${pct(m.resolved, m.attempts)})`,
+          tone: m.attempts === 0 ? "faint" : m.resolved / m.attempts >= 0.5 ? "ok" : m.resolved ? "warn" : "bad",
+        },
+        {
+          text:
+            ` on ${m.tasks} task(s)` +
+            (m.mean_time_s != null ? ` · ${m.mean_time_s}s avg` : "") +
+            (m.mean_tokens != null ? ` · ${m.mean_tokens.toLocaleString()} tokens avg` : ""),
+          tone: "muted",
+        },
+        ...(m.agent_errors ? [{ text: ` · ${m.agent_errors} agent error(s), not counted`, tone: "warn" as Tone }] : []),
+      ])
       const failures = Object.entries(b.failures).map(([k, v]) => `${k}: ${v}`)
       const cells = b.matrix.flatMap((r: any) =>
         models.filter((m) => r.cells[m]).map((m) => ({ task: r.task_id, model: m, cell: r.cells[m] })),
@@ -374,9 +541,15 @@ export default Plugin.define({
       showDoc({
         title: "benchmark",
         sections: [
-          { heading: "Who solved what (✓ all attempts · n/m some · ✗ none · – not run · err agent error)", text: [header, ...rows].join("\n") },
-          { heading: "By model (agent errors such as quota are not counted as failures)", text: perModel.join("\n") || "(no runs yet)" },
-          { heading: "Why attempts failed", text: failures.join("\n") || "(no failures)" },
+          { heading: "Who solved what (✓ all attempts · n/m some · ✗ none · – not run · err agent error)", lines: [header, ...rows] },
+          {
+            heading: "By model (agent errors such as quota are not counted as failures)",
+            lines: perModel.length ? perModel : [[{ text: "(no runs yet)", tone: "faint" }]],
+          },
+          {
+            heading: "Why attempts failed",
+            lines: failures.length ? failures.map((f) => [{ text: f, tone: "bad" as Tone }]) : [[{ text: "(no failures)", tone: "ok" }]],
+          },
           {
             heading: "How to read it",
             text:
@@ -402,7 +575,10 @@ export default Plugin.define({
                 })),
               })
               if (pick)
-                showDoc(await data({ op: "attempt", run_id: pick.cell.run_id, task_id: pick.task, attempt: pick.cell.attempt }))
+                showDoc(
+                  await data({ op: "attempt", run_id: pick.cell.run_id, task_id: pick.task, attempt: pick.cell.attempt }),
+                  true,
+                )
             },
           },
         ],
