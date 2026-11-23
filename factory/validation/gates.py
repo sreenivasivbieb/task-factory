@@ -287,7 +287,8 @@ class Validator:
                 p = self._log("_baseline" if gr.gate == "G0" else draft.task_id, gr.gate)
                 if p is not None and p.exists():
                     gr.exec_log_paths.append(str(p))
-            mutant_logs = sorted((self.log_dir / draft.task_id).glob("G[56]-*.json"))
+            mutant_log_dir = self.log_dir / draft.task_id
+            mutant_logs = sorted(mutant_log_dir.glob("G[56]-*.json")) if mutant_log_dir.is_dir() else []
             for gr in report.gates:
                 if gr.gate in ("G5", "G6"):
                     gr.exec_log_paths += [str(p) for p in mutant_logs if p.name.startswith(gr.gate)]

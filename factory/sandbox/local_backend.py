@@ -42,7 +42,7 @@ class LocalSandboxFactory(SandboxFactory):
         try:
             tar_path = git_archive(spec, tmp.parent / f"{tmp.name}.tar")
             with tarfile.open(tar_path) as tf:
-                tf.extractall(tmp, filter="data")
+                tf.extractall(tmp, **({"filter": "data"} if sys.version_info >= (3, 12) else {}))
             tar_path.unlink()
             setup = env.setup_commands if self.cfg.local_run_setup else []
             if env.setup_commands and not setup:
@@ -120,8 +120,11 @@ class LocalSandbox(Sandbox):
         except subprocess.TimeoutExpired:
             timed_out = True
             try:
-                os.killpg(proc.pid, signal.SIGKILL)  # whole process group
-            except ProcessLookupError:
+                if hasattr(os, "killpg"):
+                    os.killpg(proc.pid, signal.SIGKILL)  # whole process group
+                else:
+                    proc.kill()  # Windows fallback
+            except (ProcessLookupError, OSError):
                 pass
             out, err = proc.communicate()
         code = proc.returncode if not timed_out else -9
