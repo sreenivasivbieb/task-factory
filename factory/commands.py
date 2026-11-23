@@ -301,6 +301,9 @@ def cmd_tasks_publish(args, cfg) -> int:
     store = _store_of(args, cfg)
     wanted = [e for e in store.entries() if e.status == "approved" or (args.include_pending and e.status == "pending")]
     out = Path(args.out)
+    if not wanted:
+        print("nothing to publish: no approved tasks (approve with 'factory review' or 'factory tasks approve')")
+        return 4
     if out.is_dir():
         # a republish must not leave behind tasks that were deleted or unapproved since the last one
         keep = {e.task_id for e in wanted}
@@ -308,9 +311,6 @@ def cmd_tasks_publish(args, cfg) -> int:
         for d in stale:
             shutil.rmtree(d)
             print(f"removed   {d.name}  (no longer approved)")
-    if not wanted:
-        print("nothing to publish: no approved tasks (approve with 'factory review' or 'factory tasks approve')")
-        return 4
     out.mkdir(parents=True, exist_ok=True)
     for e in wanted:
         if args.format == "harbor":
@@ -362,7 +362,7 @@ def cmd_review(args, cfg) -> int:
             import shlex
             import subprocess
 
-            subprocess.call([*shlex.split(editor), str(draft_dir)])
+            subprocess.call([*shlex.split(editor, posix=(os.name != "nt")), str(draft_dir)])
         if ask("press Enter when done editing (or type 'cancel')> ").strip().lower() == "cancel":
             return None
         reason = ask("what did you change and why? (required)> ").strip()
@@ -449,7 +449,7 @@ def _printer(console):
     def on_result(r):
         style = "green" if r.resolved else "red"
         line = f"  [{style}]{r.category:16}[/] {r.task_id} (attempt {r.attempt}, agent {r.agent_duration_s}s)"
-        if r.branch:
+        if r.branch and r.commit:
             line += f"\n      [green]new branch[/] {r.branch} @ {r.commit[:12]}"
         console.print(line)
     return on_result

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import posixpath
 import xml.etree.ElementTree as ET
 
 from ...errors import ParseError
@@ -16,7 +17,7 @@ from ...models import TestResult
 
 def _rel(path: str, roots: list[str]) -> str:
     """Make an absolute path relative to the first matching repo root."""
-    if not os.path.isabs(path):
+    if not posixpath.isabs(path):
         return path.replace("\\", "/")
     for root in roots:
         root = root.rstrip("/")

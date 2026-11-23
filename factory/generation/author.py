@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import tempfile
 from pathlib import Path, PurePosixPath
 
@@ -53,7 +54,9 @@ def _test_files(data: dict):
     """``{"tests": {path: text}}``, or the path map itself (models often drop the wrapper)."""
     if "tests" in data:
         return data["tests"]
-    if data and all(isinstance(v, str) and "/" in k for k, v in data.items()):
+    if data and all(isinstance(v, str) for v in data.values()) and all(
+            k.endswith((".py", ".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx", ".java", ".go", ".rs"))
+            or "/" in k for k in data):
         return data
     return None
 
@@ -118,6 +121,7 @@ def draft_task(spec, drafts: Path, args, *, reply=None) -> Path:
             f"Requirements: {requirements}\nBaseline: {baseline}")
 
         drafts.mkdir(parents=True, exist_ok=True)
+        final_name = None
         with tempfile.TemporaryDirectory(prefix=".generating-", dir=drafts) as staging:
             path = Path(staging)
             _write_files(path / "after", solution.get("after"), repo, '"after" (the reference change)')
@@ -126,4 +130,6 @@ def draft_task(spec, drafts: Path, args, *, reply=None) -> Path:
             (path / "task.json").write_text(
                 json.dumps({"title": title, "model": model}), encoding="utf-8",
             )
-            return path.rename(path.with_name(path.name.replace(".generating-", "generated-", 1)))
+            final_name = path.with_name(path.name.replace(".generating-", "generated-", 1))
+            shutil.move(str(path), str(final_name))
+        return final_name

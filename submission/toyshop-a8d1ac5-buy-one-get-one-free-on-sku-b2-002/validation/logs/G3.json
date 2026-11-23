@@ -1,0 +1,70 @@
+{
+  "command": "python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 --junitxml=.factory/report.xml tests/test_bogo.py",
+  "exec": {
+    "schema_version": 1,
+    "argv": [
+      "sh",
+      "-c",
+      "python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 --junitxml=.factory/report.xml tests/test_bogo.py"
+    ],
+    "exit_code": 1,
+    "stdout": "FFFFFF                                                                   [100%]\r\n================================== FAILURES ===================================\r\n_____________________ test_bogo_line_total_even_quantity ______________________\r\n\r\n    def test_bogo_line_total_even_quantity():\r\n>       assert line_total(45, 2, \"B2\") == 45\r\n               ^^^^^^^^^^^^^^^^^^^^^^^\r\nE       TypeError: line_total() takes 2 positional arguments but 3 were given\r\n\r\ntests\\test_bogo.py:6: TypeError\r\n______________________ test_bogo_line_total_odd_quantity ______________________\r\n\r\n    def test_bogo_line_total_odd_quantity():\r\n>       assert line_total(45, 1, \"B2\") == 45\r\n               ^^^^^^^^^^^^^^^^^^^^^^^\r\nE       TypeError: line_total() takes 2 positional arguments but 3 were given\r\n\r\ntests\\test_bogo.py:11: TypeError\r\n____________________ test_bogo_only_applies_to_listed_skus ____________________\r\n\r\n    def test_bogo_only_applies_to_listed_skus():\r\n>       assert line_total(120, 2, \"A1\") == 240\r\n               ^^^^^^^^^^^^^^^^^^^^^^^^\r\nE       TypeError: line_total() takes 2 positional arguments but 3 were given\r\n\r\ntests\\test_bogo.py:17: TypeError\r\n__________________ test_line_total_without_sku_is_unchanged ___________________\r\n\r\n    def test_line_total_without_sku_is_unchanged():\r\n        assert line_total(120, 3) == 360\r\n>       assert line_total(45, 2, \"B2\") == 45\r\n               ^^^^^^^^^^^^^^^^^^^^^^^\r\nE       TypeError: line_total() takes 2 positional arguments but 3 were given\r\n\r\ntests\\test_bogo.py:23: TypeError\r\n_______________________ test_bogo_in_subtotal_and_total _______________________\r\n\r\ncart = <toyshop.cart.Cart object at 0x000001AA5502E270>\r\n\r\n    def test_bogo_in_subtotal_and_total(cart):\r\n        cart.add(\"B2\", 2)\r\n        cart.add(\"A1\", 2)\r\n>       assert subtotal(cart) == 45 + 240\r\nE       assert 330 == (45 + 240)\r\nE        +  where 330 = subtotal(<toyshop.cart.Cart object at 0x000001AA5502E270>)\r\n\r\ntests\\test_bogo.py:29: AssertionError\r\n____________________________ test_bogo_in_receipt _____________________________\r\n\r\ncart = <toyshop.cart.Cart object at 0x000001AA54806E90>\r\n\r\n    def test_bogo_in_receipt(cart):\r\n        cart.add(\"B2\", 2)\r\n        text = render(cart)\r\n>       assert \"2 x Banana $0.45\" in text\r\nE       AssertionError: assert '2 x Banana $0.45' in '2 x Banana $0.90\\nTOTAL $0.90'\r\n\r\ntests\\test_bogo.py:36: AssertionError\r\n- generated xml file: C:\\Users\\DELL\\AppData\\Local\\Temp\\factory-sb-qxtktb7d\\repo\\.factory\\report.xml -\r\n=========================== short test summary info ===========================\r\nFAILED tests/test_bogo.py::test_bogo_line_total_even_quantity - TypeError: line_total() takes 2 positional arguments but 3 were given\r\nFAILED tests/test_bogo.py::test_bogo_line_total_odd_quantity - TypeError: line_total() takes 2 positional arguments but 3 were given\r\nFAILED tests/test_bogo.py::test_bogo_only_applies_to_listed_skus - TypeError: line_total() takes 2 positional arguments but 3 were given\r\nFAILED tests/test_bogo.py::test_line_total_without_sku_is_unchanged - TypeError: line_total() takes 2 positional arguments but 3 were given\r\nFAILED tests/test_bogo.py::test_bogo_in_subtotal_and_total - assert 330 == (45 + 240)\r\n +  where 330 = subtotal(<toyshop.cart.Cart object at 0x000001AA5502E270>)\r\nFAILED tests/test_bogo.py::test_bogo_in_receipt - AssertionError: assert '2 x Banana $0.45' in '2 x Banana $0.90\\nTOTAL $0.90'\r\n6 failed in 0.23s\r\n",
+    "stderr": "",
+    "duration_s": 1.207,
+    "timed_out": false,
+    "oom_killed": false
+  },
+  "reports": [
+    "<?xml version=\"1.0\" encoding=\"utf-8\"?><testsuites name=\"pytest tests\"><testsuite name=\"pytest\" errors=\"0\" failures=\"6\" skipped=\"0\" tests=\"6\" time=\"0.127\" timestamp=\"2026-11-23T14:13:18.970093+00:00\" hostname=\"gireesh\"><testcase classname=\"tests.test_bogo\" name=\"test_bogo_line_total_even_quantity\" file=\"tests\\test_bogo.py\" line=\"4\" time=\"0.001\"><failure message=\"TypeError: line_total() takes 2 positional arguments but 3 were given\">def test_bogo_line_total_even_quantity():\r\n&gt;       assert line_total(45, 2, \"B2\") == 45\r\n               ^^^^^^^^^^^^^^^^^^^^^^^\r\nE       TypeError: line_total() takes 2 positional arguments but 3 were given\r\n\r\ntests\\test_bogo.py:6: TypeError</failure></testcase><testcase classname=\"tests.test_bogo\" name=\"test_bogo_line_total_odd_quantity\" file=\"tests\\test_bogo.py\" line=\"9\" time=\"0.001\"><failure message=\"TypeError: line_total() takes 2 positional arguments but 3 were given\">def test_bogo_line_total_odd_quantity():\r\n&gt;       assert line_total(45, 1, \"B2\") == 45\r\n               ^^^^^^^^^^^^^^^^^^^^^^^\r\nE       TypeError: line_total() takes 2 positional arguments but 3 were given\r\n\r\ntests\\test_bogo.py:11: TypeError</failure></testcase><testcase classname=\"tests.test_bogo\" name=\"test_bogo_only_applies_to_listed_skus\" file=\"tests\\test_bogo.py\" line=\"15\" time=\"0.001\"><failure message=\"TypeError: line_total() takes 2 positional arguments but 3 were given\">def test_bogo_only_applies_to_listed_skus():\r\n&gt;       assert line_total(120, 2, \"A1\") == 240\r\n               ^^^^^^^^^^^^^^^^^^^^^^^^\r\nE       TypeError: line_total() takes 2 positional arguments but 3 were given\r\n\r\ntests\\test_bogo.py:17: TypeError</failure></testcase><testcase classname=\"tests.test_bogo\" name=\"test_line_total_without_sku_is_unchanged\" file=\"tests\\test_bogo.py\" line=\"20\" time=\"0.001\"><failure message=\"TypeError: line_total() takes 2 positional arguments but 3 were given\">def test_line_total_without_sku_is_unchanged():\r\n        assert line_total(120, 3) == 360\r\n&gt;       assert line_total(45, 2, \"B2\") == 45\r\n               ^^^^^^^^^^^^^^^^^^^^^^^\r\nE       TypeError: line_total() takes 2 positional arguments but 3 were given\r\n\r\ntests\\test_bogo.py:23: TypeError</failure></testcase><testcase classname=\"tests.test_bogo\" name=\"test_bogo_in_subtotal_and_total\" file=\"tests\\test_bogo.py\" line=\"25\" time=\"0.002\"><failure message=\"assert 330 == (45 + 240)&#10; +  where 330 = subtotal(&lt;toyshop.cart.Cart object at 0x000001AA5502E270&gt;)\">cart = &lt;toyshop.cart.Cart object at 0x000001AA5502E270&gt;\r\n\r\n    def test_bogo_in_subtotal_and_total(cart):\r\n        cart.add(\"B2\", 2)\r\n        cart.add(\"A1\", 2)\r\n&gt;       assert subtotal(cart) == 45 + 240\r\nE       assert 330 == (45 + 240)\r\nE        +  where 330 = subtotal(&lt;toyshop.cart.Cart object at 0x000001AA5502E270&gt;)\r\n\r\ntests\\test_bogo.py:29: AssertionError</failure></testcase><testcase classname=\"tests.test_bogo\" name=\"test_bogo_in_receipt\" file=\"tests\\test_bogo.py\" line=\"32\" time=\"0.001\"><failure message=\"AssertionError: assert '2 x Banana $0.45' in '2 x Banana $0.90\\nTOTAL $0.90'\">cart = &lt;toyshop.cart.Cart object at 0x000001AA54806E90&gt;\r\n\r\n    def test_bogo_in_receipt(cart):\r\n        cart.add(\"B2\", 2)\r\n        text = render(cart)\r\n&gt;       assert \"2 x Banana $0.45\" in text\r\nE       AssertionError: assert '2 x Banana $0.45' in '2 x Banana $0.90\\nTOTAL $0.90'\r\n\r\ntests\\test_bogo.py:36: AssertionError</failure></testcase></testsuite></testsuites>"
+  ],
+  "summary": {
+    "schema_version": 1,
+    "results": [
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_line_total_even_quantity",
+        "status": "failed",
+        "duration_s": 0.001
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_line_total_odd_quantity",
+        "status": "failed",
+        "duration_s": 0.001
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_only_applies_to_listed_skus",
+        "status": "failed",
+        "duration_s": 0.001
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_line_total_without_sku_is_unchanged",
+        "status": "failed",
+        "duration_s": 0.001
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_in_subtotal_and_total",
+        "status": "failed",
+        "duration_s": 0.002
+      },
+      {
+        "schema_version": 1,
+        "test_id": "tests/test_bogo.py::test_bogo_in_receipt",
+        "status": "failed",
+        "duration_s": 0.001
+      }
+    ],
+    "counts": {
+      "passed": 0,
+      "failed": 6,
+      "skipped": 0,
+      "error": 0
+    },
+    "raw_exit_code": 1,
+    "timed_out": false,
+    "error": null
+  }
+}

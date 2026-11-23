@@ -1,0 +1,17 @@
+{
+  "counts": {
+    "pending": 0,
+    "approved": 2,
+    "deleted": 0
+  },
+  "deleted": [],
+  "human_authored": [
+    "toyshop-a8d1ac5-bulk-discount-on-cart-lines-008"
+  ],
+  "manual_edits": [
+    {
+      "task_id": "toyshop-a8d1ac5-buy-one-get-one-free-on-sku-b2-002",
+      "reason": "Remove cosmetic EOF-only hunks; the generated files now end with a newline, so the full mutation set has no equivalent mutant."
+    }
+  ]
+}
