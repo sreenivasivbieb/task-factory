@@ -130,9 +130,13 @@ def test_real_solution_plus_extra_conftest_still_resolves(local_factory, package
 
 
 def test_harbor_verifier_checks_hidden_tests_ran(py_env_local):
-    script = verifier_script(py_env_local, [], ["tests/test_bulk_discount.py"], 3)
-    assert "tests/test_bulk_discount.py || fail 'hidden feature tests failed'" in script
-    assert 'only $ran of 3 hidden feature tests ran' in script and "<(failure|error|skipped)" in script
+    f2p = [f"tests/test_bulk_discount.py::test_{n}" for n in ("a", "b", "c")]
+    script = verifier_script(py_env_local, [], ["tests/test_bulk_discount.py"], 3, f2p)
+    assert "passed=$((ran - bad))" in script and "<(failure|error|skipped)" in script
+    assert 'reward 0 "an existing test failed"' in script
+    # the regression run skips the feature tests; the feature run selects exactly them
+    assert script.count("--deselect") >= 3
+    assert all(t in script for t in f2p)
     bash = shutil.which("bash")
     if bash:
         assert subprocess.run([bash, "-n", "-c", script]).returncode == 0  # valid bash
