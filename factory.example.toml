@@ -16,6 +16,14 @@ mutations = ["empty", "flip_comparison", "drop_error_branch"]
 # full set: ["empty", "revert_half", "flip_comparison", "swap_arguments", "drop_error_branch", "hardcode_expected"]
 max_known_failure_ratio = 0.2
 
+[harness]
+k = 1                     # attempts per task
+workers = 1               # attempts at the same time (more = faster, more quota errors on free models)
+egress = "allowlist"      # the agent's sandbox reaches only allowed_hosts; "open" = the whole internet
+# allowed_hosts = ["opencode.ai", "*.opencode.ai", "integrate.api.nvidia.com", "api.tokenrouter.com",
+#                  "openrouter.ai", "api.anthropic.com", "api.openai.com", "api.groq.com",
+#                  "bedrock-runtime.*.amazonaws.com"]
+
 # Optional: override what the inspector detects.
 # [env]
 # base_image = "python:3.12-slim"
