@@ -311,6 +311,14 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   `build_derived_image` (agent files are mounted from volumes since D66; derived images now only run
   install commands). Kept on purpose: framework hooks (`redirect_request`, `writable`, pydantic
   validators) and `submission/` (a teammate's deliverable). Design doc module map updated.
+- **D68 The SWE miner follows the project's pytest `python_files`** (open issue from the review: a
+  project that names its tests `check_*.py` lost them). `swe/testfiles.ts` reads `python_files` from
+  `[tool.pytest.ini_options]`, `pytest.ini`, `tox.ini` `[pytest]` or `setup.cfg` `[tool:pytest]`
+  (pytest's own order; `pytest.ini` wins even without the option). The patterns decide which files
+  of a PR are hidden tests (at the base commit; at the default branch for the mining filter) and
+  which files the test command passes to pytest. Patterns with characters other than plain globs, or
+  not ending in `.py`, fall back to the defaults, because they are written into a shell command. The
+  repository is now cloned before mining.
 
 ## Limitations
 

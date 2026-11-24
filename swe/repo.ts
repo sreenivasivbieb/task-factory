@@ -1,7 +1,7 @@
 // Step 2, split: the pull request's change at its exact base commit, cut into the
 // reference patch (code) and the hidden tests (test files), like SWE-bench's patch / test_patch.
 import { execFileSync } from "node:child_process"
-import { isTestPath } from "./github.ts"
+import { isTestFile, PYTEST_CONFIG_FILES, pythonFiles } from "./testfiles.ts"
 import { must, run, type Runner } from "./util.ts"
 
 export type Split = {
@@ -13,6 +13,7 @@ export type Split = {
   patch: string // code change, applied by the reference solution
   testPatch: string // test change, for the SWE-bench export
   tests: Record<string, string> // hidden test files: path -> content after the PR
+  pythonFiles: string[] // pytest's test file patterns at the base commit
 }
 
 const git = (repo: string, args: string[], exec: Runner = run, input?: string) =>
@@ -36,12 +37,13 @@ export async function splitPullRequest(dir: string, prNumber: number, baseRefOid
     await git(dir, ["fetch", "-q", "origin", baseRefOid], exec)
   const base = (await must(git(dir, ["merge-base", baseRefOid, head], exec), "merge-base (base branch was rewritten?)")).trim()
   const baseDate = (await must(git(dir, ["show", "-s", "--format=%cI", base], exec), "commit date")).trim()
+  const patterns = pythonFiles(await readFiles(dir, base, PYTEST_CONFIG_FILES, exec))
   const status = await must(git(dir, ["diff", "--no-renames", "--name-status", base, head], exec), "diff")
   const codeFiles: string[] = []
   const testFiles: string[] = []
   for (const line of status.split("\n").filter(Boolean)) {
     const [st, path] = line.split("\t")
-    if (isTestPath(path)) {
+    if (isTestFile(path, patterns)) {
       if (st.startsWith("D")) throw new SkipError("deletes_test_file", `the PR deletes ${path}; hidden tests can only add or change files`)
       testFiles.push(path)
     } else codeFiles.push(path)
@@ -62,7 +64,7 @@ export async function splitPullRequest(dir: string, prNumber: number, baseRefOid
     }
     if (tests[path].includes("\u0000")) throw new SkipError("binary_test_file", `${path} contains NUL bytes`)
   }
-  return { base, head, baseDate, codeFiles, testFiles, patch, testPatch, tests }
+  return { base, head, baseDate, codeFiles, testFiles, patch, testPatch, tests, pythonFiles: patterns }
 }
 
 /** Files at the base commit, for environment detection: path -> content (missing files are left out). */

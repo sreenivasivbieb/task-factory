@@ -5,6 +5,7 @@ import { copyFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { type EnvConfig, FIXED_ENV, imageTag, renderDockerfile } from "./formats.ts"
+import { DEFAULT_PYTHON_FILES, pytestCommand } from "./testfiles.ts"
 import { run, shQuote, type Runner } from "./util.ts"
 
 export const PY_FILES = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "requirements-dev.txt",
@@ -16,10 +17,6 @@ export const PY_FILES = ["pyproject.toml", "setup.py", "setup.cfg", "requirement
 export const PROTECTED =
   "(^|/)(tests?|__tests__|specs?|testing)/|(^|/)test_[^/]*\\.py$|_test\\.py$|(^|/)conftest\\.py$|\\.pth$|" +
   "(^|/)(pyproject\\.toml|pytest\\.ini|setup\\.cfg|sitecustomize\\.py|tox\\.ini|usercustomize\\.py)$"
-
-export const PYTEST_COMMAND =
-  "python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 --junitxml={report} " +
-  `$(for f in {select}; do case "\${f##*/}" in test_*.py|*_test.py) printf '%s\\n' "$f";; esac; done)`
 
 /** The newest Python that was current at `date` (old code rarely runs on a newer one). */
 export function pythonFor(date: string, requiresPython?: string): string {
@@ -52,7 +49,8 @@ export function testGroup(files: Record<string, string>): string | undefined {
 }
 
 /** EnvConfig for a Python repo at one commit. `until`: install packages released before this moment. */
-export function pythonEnv(files: Record<string, string>, until: string, baseImage?: string): EnvConfig {
+export function pythonEnv(files: Record<string, string>, until: string, baseImage?: string,
+  patterns: string[] = DEFAULT_PYTHON_FILES): EnvConfig {
   const requires = /requires-python\s*=\s*["']([^"']+)["']/.exec(files["pyproject.toml"] ?? "")?.[1]
     ?? /python_requires\s*=\s*["']?([^"'\n,)]+)/.exec((files["setup.py"] ?? "") + "\n" + (files["setup.cfg"] ?? ""))?.[1]
   const version = pythonFor(until, requires)
@@ -72,10 +70,8 @@ export function pythonEnv(files: Record<string, string>, until: string, baseImag
     schema_version: 1,
     base_image: baseImage ?? `python:${version}-slim`,
     setup_commands: setup,
-    // Hidden test files can include conftest.py, data files and helpers; pytest aborts the whole run
-    // when such a file is a command-line argument, so only test modules are passed (the rest is
-    // still written into the repo). The harness passes every hidden file: the filter lives here.
-    test_command: PYTEST_COMMAND,
+    // only test modules reach pytest (testfiles.ts); conftest, data and helpers are still written
+    test_command: pytestCommand(patterns),
     test_timeout_s: 900,
     env_vars: {},
     workdir: "/repo",

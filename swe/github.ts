@@ -1,5 +1,6 @@
 // Step 1, mine: merged pull requests that close an issue and change both tests and code.
 // Uses the GitHub CLI (`gh api graphql`), so the user's own `gh auth login` is the only setup.
+import { DEFAULT_PYTHON_FILES, isTestFile } from "./testfiles.ts"
 import { run, type Runner } from "./util.ts"
 
 export type Issue = { number: number; title: string; body: string; url: string; labels: string[] }
@@ -31,9 +32,8 @@ export function parseRepo(input: string): RepoRef {
   return { owner: m[1], name: m[2], url: `https://github.com/${m[1]}/${m[2]}.git` }
 }
 
-// Test files: the Python ecosystem's test_paths plus the shared test folders (factory/ecosystems.toml).
-const TEST_PATH = /(^|\/)(tests?|__tests__|specs?|testing)\/|(^|\/)test_[^/]*\.py$|_test\.py$|(^|\/)conftest\.py$/
-export const isTestPath = (path: string) => TEST_PATH.test(path)
+// Test files: the shared test folders, conftest.py and the project's pytest `python_files` (testfiles.ts).
+export const isTestPath = (path: string, patterns: string[] = DEFAULT_PYTHON_FILES) => isTestFile(path, patterns)
 
 const QUERY = `query($owner: String!, $name: String!, $cursor: String) {
   repository(owner: $owner, name: $name) {
@@ -51,17 +51,24 @@ const QUERY = `query($owner: String!, $name: String!, $cursor: String) {
 }`
 
 /** Why a pull request is not a task candidate, or null when it is one (the SWE-bench rules). */
-export function rejectReason(pr: PullRequest, totalFiles = pr.files.length): string | null {
+export function rejectReason(pr: PullRequest, totalFiles = pr.files.length, patterns = DEFAULT_PYTHON_FILES): string | null {
   if (!pr.issues.length) return "no_linked_issue"
   if (totalFiles > pr.files.length) return "too_many_files"
-  const tests = pr.files.filter((f) => isTestPath(f.path))
+  const tests = pr.files.filter((f) => isTestPath(f.path, patterns))
   if (!tests.length) return "no_test_change"
   if (tests.length === pr.files.length) return "only_test_change"
   if (!pr.issues.some((i) => (i.body ?? "").trim() || i.title.trim())) return "empty_issue"
   return null
 }
 
-export type MineOptions = { scan: number; max: number; since?: string; skip?: Set<number>; progress?: (line: string) => void }
+export type MineOptions = {
+  scan: number
+  max: number
+  since?: string
+  skip?: Set<number>
+  progress?: (line: string) => void
+  patterns?: string[] // pytest python_files of the default branch
+}
 
 /** Newest merged pull requests first; stops after `scan` PRs, `max` candidates or the `since` date. */
 export async function minePullRequests(repo: RepoRef, opts: MineOptions, exec: Runner = run) {
@@ -100,7 +107,7 @@ export async function minePullRequests(repo: RepoRef, opts: MineOptions, exec: R
         skipped.already_done = (skipped.already_done ?? 0) + 1
         continue
       }
-      const why = rejectReason(pr, n.files?.totalCount ?? pr.files.length)
+      const why = rejectReason(pr, n.files?.totalCount ?? pr.files.length, opts.patterns)
       if (why) skipped[why] = (skipped[why] ?? 0) + 1
       else {
         candidates.push(pr)

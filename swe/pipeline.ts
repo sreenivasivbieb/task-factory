@@ -10,6 +10,7 @@ import type { EnvConfig } from "./formats.ts"
 import { minePullRequests, parseRepo, problemStatement, type PullRequest, type RepoRef, taskKind } from "./github.ts"
 import { writePackage } from "./package.ts"
 import { qualityOf } from "./quality.ts"
+import { DEFAULT_PYTHON_FILES, PYTEST_CONFIG_FILES, pythonFiles } from "./testfiles.ts"
 import { syncRecords } from "./records.ts"
 import { archive, ensureClone, listFiles, readFiles, SkipError, splitPullRequest, type Split } from "./repo.ts"
 import { clip, run, type Runner } from "./util.ts"
@@ -130,15 +131,17 @@ export async function mine(url: string, opts: Options) {
   mkdirSync(join(out, "cache"), { recursive: true })
   const done = new Set(outcomes(out).filter((o) => o.status === "task" || !opts.retry).map((o) => o.pr))
 
-  say(`1/5 mining ${repo.owner}/${repo.name}: merged PRs that close an issue and change tests and code`)
-  const mined = await minePullRequests(repo, { scan: opts.scan, max: opts.max, since: opts.since, skip: done, progress: say }, exec)
-  writeFileSync(join(out, "mined.json"), JSON.stringify({ scanned: mined.scanned, skipped: mined.skipped, at: new Date().toISOString() }, null, 2))
-  say(`  scanned ${mined.scanned} PR(s): ${mined.candidates.length} candidate(s); skipped ${JSON.stringify(mined.skipped)}`)
-  if (!mined.candidates.length) return { out, repo, made: [] as string[], funnel: funnel(out) }
-
+  // clone first: the default branch's pytest config says which files are tests
   say(`  cloning ${repo.url}`)
   const clone = join(out, "repo")
   await ensureClone(repo.url, clone, exec)
+  const patterns = pythonFiles(await readFiles(clone, "HEAD", PYTEST_CONFIG_FILES, exec))
+  if (patterns.join() !== DEFAULT_PYTHON_FILES.join()) say(`  test files: ${patterns.join(", ")} (pytest python_files)`)
+  say(`1/5 mining ${repo.owner}/${repo.name}: merged PRs that close an issue and change tests and code`)
+  const mined = await minePullRequests(repo, { scan: opts.scan, max: opts.max, since: opts.since, skip: done, progress: say, patterns }, exec)
+  writeFileSync(join(out, "mined.json"), JSON.stringify({ scanned: mined.scanned, skipped: mined.skipped, at: new Date().toISOString() }, null, 2))
+  say(`  scanned ${mined.scanned} PR(s): ${mined.candidates.length} candidate(s); skipped ${JSON.stringify(mined.skipped)}`)
+  if (!mined.candidates.length) return { out, repo, made: [] as string[], funnel: funnel(out) }
 
   const made: string[] = []
   // Workers process PRs at the same time (build + tests); git on the shared clone runs one at a time.
@@ -164,7 +167,7 @@ export async function mine(url: string, opts: Options) {
       const repoTar = join(out, "cache", `${split.base}.tar`)
       await withGit(async () => existsSync(repoTar) || archive(clone, split.base, repoTar, exec))
 
-      let env = pythonEnv(files, pr.mergedAt)
+      let env = pythonEnv(files, pr.mergedAt, undefined, split.pythonFiles)
       env.base_image = await pinImage(env.base_image, exec)
       let image = ""
       let runs: Awaited<ReturnType<typeof testRuns>> | undefined
