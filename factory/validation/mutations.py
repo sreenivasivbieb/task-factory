@@ -7,6 +7,7 @@ The empty-patch control is covered by G3 and is not generated here.
 
 from __future__ import annotations
 
+import fnmatch
 import re
 from dataclasses import dataclass, field
 
@@ -69,7 +70,21 @@ def render_patch(files: list[FilePatch]) -> str:
 
 # --------------------------------------------------------------------------- line helpers
 
-_COMMENT_RE = re.compile(r"^\s*(#|//|\*|/\*)")
+def _rules():
+    """The language-specific parts of the operators, from ecosystems.toml ([mutations])."""
+    from ..ecosystems import registry
+
+    return registry().mutation_rules()
+
+
+def _comment_re() -> re.Pattern:
+    return re.compile(r"^\s*(" + "|".join(re.escape(p) for p in _rules().comment_prefixes) + ")")
+
+
+def _def_re() -> re.Pattern:
+    return re.compile(r"^\s*(" + "|".join(map(re.escape, _rules().definition_keywords)) + r")\b")
+
+
 _STRING_RE = re.compile(r"'(?:\\.|[^'\\])*'|\"(?:\\.|[^\"\\])*\"|`(?:\\.|[^`\\])*`")
 
 
@@ -80,10 +95,11 @@ def _mask_strings(code: str) -> str:
 
 def _added(files: list[FilePatch]):
     """Yield (file_idx, hunk_idx, line_idx, code) for every added, non-comment line."""
+    comment = _comment_re()
     for fi, f in enumerate(files):
         for hi, h in enumerate(f.hunks):
             for li, line in enumerate(h.lines):
-                if line.startswith("+") and not line.startswith("+++") and not _COMMENT_RE.match(line[1:]):
+                if line.startswith("+") and not line.startswith("+++") and not comment.match(line[1:]):
                     yield fi, hi, li, line[1:]
 
 
@@ -100,14 +116,13 @@ def _with_line(files: list[FilePatch], fi: int, hi: int, li: int, new_code: str)
 
 _FLIP = {"<=": "<", ">=": ">", "<": "<=", ">": ">=", "==": "!=", "!=": "==", "===": "!==", "!==": "==="}
 _CMP_RE = re.compile(r"===|!==|(?<![<>=!\-])(?:<=|>=|==|!=|<|>)(?![<>=])")
-_DEF_RE = re.compile(r"^\s*(def|class|function|func|fn|public|private|protected|static|import|from|export)\b")
 
 
 def flip_comparison(diff: str, limit: int = 2) -> list[str]:
     files = parse_patch(diff)
     out = []
     for fi, hi, li, code in _added(files):
-        if _DEF_RE.match(code):
+        if _def_re().match(code):
             continue
         masked = _mask_strings(code)
         m = _CMP_RE.search(masked)
@@ -129,7 +144,7 @@ def swap_arguments(diff: str, limit: int = 2) -> list[str]:
     files = parse_patch(diff)
     out = []
     for fi, hi, li, code in _added(files):
-        if _DEF_RE.match(code):
+        if _def_re().match(code):
             continue
         m = _RETURN_PAIR_RE.match(code)
         if m and m.group(2) != m.group(3):
@@ -145,41 +160,37 @@ def swap_arguments(diff: str, limit: int = 2) -> list[str]:
     return out
 
 
-_RAISE_RE = re.compile(r"^(\s*)raise\b")
-_THROW_RE = re.compile(r"^(\s*)throw\b")
+def _file_name(fp: FilePatch) -> str:
+    """The changed file's name, from the ``+++ b/...`` (or ``--- a/...``) header line."""
+    for prefix in ("+++ ", "--- "):
+        for line in fp.header:
+            if line.startswith(prefix) and "/dev/null" not in line:
+                return line[4:].split("\t", 1)[0].strip().rsplit("/", 1)[-1]
+    return ""
 
 
 def drop_error_branch(diff: str, limit: int = 2) -> list[str]:
+    """Turn an added error statement (raise, throw, panic, ...) into one that does nothing."""
     files = parse_patch(diff)
+    rules = [(r.files, re.compile(r.match), r.replace) for r in _rules().error_branch]
     out = []
     for fi, hi, li, code in _added(files):
-        m = _RAISE_RE.match(code)
-        if m:
-            new = f"{m.group(1)}pass"
-        else:
-            m = _THROW_RE.match(code)
-            if not m:
-                continue
-            new = f"{m.group(1)};"
-        out.append(_with_line(files, fi, hi, li, new))
+        name = _file_name(files[fi])
+        for globs, rx, replace in rules:
+            if any(fnmatch.fnmatch(name, g) for g in globs) and rx.match(code):
+                out.append(_with_line(files, fi, hi, li, rx.sub(replace, code, count=1)))
+                break
         if len(out) >= limit:
             break
     return out
 
 
-_EXPECT_RES = [
-    re.compile(r"==\s*(-?\d+(?:\.\d+)?|'[^']*'|\"[^\"]*\")"),
-    re.compile(r"assert\.(?:strict)?[eE]qual\([^,]+,\s*(-?\d+(?:\.\d+)?|'[^']*'|\"[^\"]*\")"),
-    re.compile(r"\.toBe\(\s*(-?\d+(?:\.\d+)?|'[^']*'|\"[^\"]*\")\s*\)"),
-    re.compile(r"assertEquals\(\s*(-?\d+(?:\.\d+)?|\"[^\"]*\")\s*,"),
-]
-_RETURN_RE = re.compile(r"^(\s*return\s+)(.+?)(\s*;?\s*)$")
 
 
 def expected_literals(test_files: dict[str, str]) -> list[str]:
     found: list[str] = []
     for content in test_files.values():
-        for rx in _EXPECT_RES:
+        for rx in map(re.compile, _rules().expected_literal):
             for m in rx.finditer(content):
                 if m.group(1) not in found:
                     found.append(m.group(1))
@@ -192,8 +203,11 @@ def hardcode_expected(diff: str, test_files: dict[str, str], limit: int = 1) -> 
         return []
     files = parse_patch(diff)
     out = []
+    rules = [(r.files, re.compile(r.match)) for r in _rules().value_return]
     for fi, hi, li, code in _added(files):
-        m = _RETURN_RE.match(code)
+        name = _file_name(files[fi])
+        rx = next((rx for globs, rx in rules if any(fnmatch.fnmatch(name, g) for g in globs)), None)
+        m = rx.match(code) if rx else None
         if not m or m.group(2).strip() in literals:
             continue
         new = f"{m.group(1)}{literals[0]}{m.group(3)}"

@@ -5,59 +5,47 @@ Detection failure returns ``needs_manual_config`` with reasons. It never guesses
 
 from __future__ import annotations
 
-import json
 import logging
 import re
 import tomllib
 from pathlib import Path
 
 from ..config import EnvOverrides
+from ..ecosystems import Ecosystem, EnvKeys, helper_text, registry
 from ..errors import BuildError, FactoryError
 from ..models import EnvConfig, InspectResult, RepoSpec
-from ..runner.test_runner import NODE_TEST_COMMAND, run_tests
+from ..runner.test_runner import run_tests
 from ..sandbox.base import SandboxFactory
 
 log = logging.getLogger("factory.inspector")
 
-MARKERS = [
-    ("python", ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]),
-    ("node", ["package.json"]),
-    ("java", ["pom.xml", "build.gradle", "build.gradle.kts"]),
-    ("go", ["go.mod"]),
-    ("rust", ["Cargo.toml"]),
-]
-
-PYTEST_COMMAND = ("python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 "
-                  "--junitxml={report} {select}")
+_ENV_KEYS = [k for k in EnvKeys.model_fields if k != "helpers"]
 
 
 def detect_language(path: Path | str) -> str | None:
-    path = Path(path)
-    for lang, files in MARKERS:
-        if any((path / f).exists() for f in files):
-            return lang
-    return None
+    """The ecosystem whose marker files the repo has (see ecosystems.toml)."""
+    return registry().detect(path)
 
 
-# --------------------------------------------------------------------------- per-language rules
+# --------------------------------------------------------------------------- adapters
+# An adapter reads the repo's own build files where plain data is not enough.
 
 
-def _python(root: Path) -> tuple[EnvConfig | None, list[str]]:
-    setup: list[str] = []
-    py_version = "3.11"
+def _python_adapter(root: Path, keys: dict) -> list[str]:
+    """Python version from requires-python; install the project (with its test extra) and requirements."""
+    version, setup = "3.11", []
     pyproject = root / "pyproject.toml"
     if pyproject.exists():
         try:
             data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
         except tomllib.TOMLDecodeError as exc:
-            return None, [f"pyproject.toml is not valid TOML: {exc}"]
+            return [f"pyproject.toml is not valid TOML: {exc}"]
         project = data.get("project", {})
         m = re.search(r">=\s*3\.(\d+)", project.get("requires-python", ""))
         if m and int(m.group(1)) > 11:
-            py_version = f"3.{m.group(1)}"
+            version = f"3.{m.group(1)}"
         extras = [e for e in ("test", "tests", "testing", "dev") if e in project.get("optional-dependencies", {})]
-        has_build = "build-system" in data or (root / "setup.py").exists()
-        if has_build or project:
+        if "build-system" in data or (root / "setup.py").exists() or project:
             setup.append(f"pip install -q -e '.[{extras[0]}]'" if extras else "pip install -q -e .")
     elif (root / "setup.py").exists():
         setup.append("pip install -q -e .")
@@ -65,64 +53,46 @@ def _python(root: Path) -> tuple[EnvConfig | None, list[str]]:
                 "test-requirements.txt"):
         if (root / req).exists():
             setup.append(f"pip install -q -r {req}")
-    setup.append("pip install -q pytest")
-    env = EnvConfig(base_image=f"python:{py_version}-slim", setup_commands=setup,
-                    test_command=PYTEST_COMMAND, framework="pytest", report_format="junit")
-    return env, []
+    keys["setup_commands"] = setup + list(keys.get("setup_commands") or [])
+    keys["base_image"] = str(keys.get("base_image", "")).replace("{python}", version)
+    return []
 
 
-def _node(root: Path) -> tuple[EnvConfig | None, list[str]]:
+ADAPTERS = {"python": _python_adapter}
+
+
+def env_for(eco: Ecosystem, root: Path) -> tuple[EnvConfig | None, list[str]]:
+    """Build the EnvConfig an ecosystem describes for this repo: variant, install step, adapter."""
+    keys = {k: getattr(eco, k) for k in _ENV_KEYS if getattr(eco, k) is not None}
+    helpers = dict(eco.helpers or {})
+    if eco.variants:
+        variant = next((v for v in eco.variants if v.matches(root)), None)
+        if variant is None:
+            names = ", ".join(v.name for v in eco.variants)
+            checked = sorted({f for v in eco.variants for f in (v.if_file, v.if_contains and v.if_contains.file) if f})
+            return None, [f"{eco.name}: none of the known test setups ({names}) matches this repo "
+                          f"(checked {', '.join(checked) or 'nothing'}); set "
+                          "env.test_command, env.framework and env.report_format in factory.toml, or add a "
+                          f"variant under [ecosystems.{eco.name}]"]
+        keys.update({k: getattr(variant, k) for k in _ENV_KEYS if getattr(variant, k) is not None})
+        helpers.update(variant.helpers or {})
+    install = next((i.command for i in eco.install if i.if_file is None or (root / i.if_file).exists()), None)
+    if install:
+        keys["setup_commands"] = [install, *(keys.get("setup_commands") or [])]
+    if eco.adapter:
+        reasons = ADAPTERS[eco.adapter](root, keys)
+        if reasons:
+            return None, reasons
+    missing = [k for k in ("base_image", "test_command", "framework", "report_format") if not keys.get(k)]
+    if missing:
+        return None, [f"{eco.name}: the ecosystem does not set {', '.join(missing)}"]
+    keys["artifacts"] = list(dict.fromkeys([*registry().common.artifacts, *eco.artifacts]))
+    keys["protected_paths"] = registry().protected_re()
     try:
-        pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        return None, [f"package.json is not valid JSON: {exc}"]
-    if (root / "package-lock.json").exists():
-        install = "npm ci --no-audit --no-fund"
-    elif (root / "yarn.lock").exists():
-        install = "corepack enable && yarn install --frozen-lockfile"
-    elif (root / "pnpm-lock.yaml").exists():
-        install = "corepack enable && pnpm install --frozen-lockfile"
-    else:
-        install = "npm install --no-audit --no-fund"
-    deps = {**pkg.get("dependencies", {}), **pkg.get("devDependencies", {})}
-    script = (pkg.get("scripts") or {}).get("test", "")
-    base = "node:22-slim"
-    if "jest" in deps or script.strip().startswith("jest"):
-        return EnvConfig(base_image=base, setup_commands=[install], framework="jest", report_format="jest-json",
-                         report_path=".factory/report.json",
-                         test_command="npx jest --ci --json --outputFile={report} {select}"), []
-    if "vitest" in deps:
-        return EnvConfig(base_image=base, setup_commands=[install], framework="node", report_format="junit",
-                         test_command="npx vitest run --reporter=junit --outputFile={report} {select}"), []
-    if "node --test" in script:
-        return EnvConfig(base_image=base, setup_commands=[install], framework="node", report_format="junit",
-                         test_command=NODE_TEST_COMMAND), []
-    return None, [f"unknown Node test runner (scripts.test = {script!r}); set env.test_command, "
-                  "env.framework and env.report_format in factory.toml"]
-
-
-def _java(root: Path) -> tuple[EnvConfig | None, list[str]]:
-    if (root / "pom.xml").exists():
-        return EnvConfig(base_image="maven:3.9-eclipse-temurin-17",
-                         setup_commands=["mvn -q -B -DskipTests dependency:go-offline test-compile"],
-                         test_command="mvn -q -B -o test", framework="maven", report_format="junit",
-                         report_path="target/surefire-reports/"), []
-    return EnvConfig(base_image="gradle:8-jdk17", setup_commands=["gradle --no-daemon -q testClasses"],
-                     test_command="gradle --no-daemon --offline -q test", framework="gradle",
-                     report_format="junit", report_path="build/test-results/test/"), []
-
-
-def _go(root: Path) -> tuple[EnvConfig | None, list[str]]:
-    return EnvConfig(base_image="golang:1.22", setup_commands=["go mod download", "go test -count=1 -run XXX ./..."],
-                     test_command="go test -count=1 -json {select}", framework="go", report_format="go-json"), []
-
-
-def _rust(root: Path) -> tuple[EnvConfig | None, list[str]]:
-    return EnvConfig(base_image="rust:1-slim", setup_commands=["cargo fetch", "cargo test --no-run"],
-                     test_command="cargo test --offline", framework="cargo", report_format="cargo-text"), []
-
-
-RULES = {"python": _python, "node": _node, "java": _java, "go": _go, "rust": _rust}
+        keys["helper_files"] = {path: helper_text(name) for path, name in helpers.items()}
+        return EnvConfig(**keys), []
+    except (ValueError, FactoryError) as exc:
+        return None, [f"{eco.name}: {exc}"]
 
 
 def _apply_overrides(env: EnvConfig | None, ov: EnvOverrides | None) -> tuple[EnvConfig | None, list[str]]:
@@ -142,14 +112,15 @@ def _apply_overrides(env: EnvConfig | None, ov: EnvOverrides | None) -> tuple[En
 def inspect_repo(spec: RepoSpec, overrides: EnvOverrides | None = None) -> InspectResult:
     """Detect the EnvConfig from marker files, then apply overrides (no build)."""
     root = Path(spec.local_path)
-    lang = spec.language or detect_language(root)
+    reg = registry()
+    lang = spec.language if spec.language in reg.ecosystems else detect_language(root)
     reasons: list[str] = []
     env = None
     if lang is None:
-        reasons.append("no known marker file (pyproject.toml, setup.py, requirements.txt, package.json, "
-                       "pom.xml, build.gradle, go.mod, Cargo.toml)")
+        reasons.append(f"no known marker file ({', '.join(reg.all_markers())}); describe the language under "
+                       "[ecosystems.<name>] in factory.toml, or set the [env] keys there")
     else:
-        env, reasons = RULES[lang](root)
+        env, reasons = env_for(reg.ecosystems[lang], root)
     env, more = _apply_overrides(env, overrides)
     reasons += more
     if env is None:

@@ -32,7 +32,6 @@ def pytest_collection_modifyitems(config, items):
 from factory.config import SandboxConfig  # noqa: E402
 from factory.models import EnvConfig, RepoSpec  # noqa: E402
 from helpers import git  # noqa: E402
-from factory.runner.test_runner import NODE_TEST_COMMAND  # noqa: E402
 
 PY_TEST_CMD = ("python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 "
                "--junitxml={report} {select}")
@@ -70,9 +69,13 @@ def py_env_local():
 
 @pytest.fixture(scope="session")
 def node_env_docker():
-    return EnvConfig(base_image="node:22-slim", setup_commands=["npm ci --no-audit --no-fund"],
-                     test_command=NODE_TEST_COMMAND,
-                     framework="node", report_format="junit", test_timeout_s=120)
+    """What the inspector derives from ecosystems.toml for the toy Node repo (node:test variant)."""
+    from factory.ecosystems import registry
+    from factory.repo.inspector import env_for
+
+    env, reasons = env_for(registry().ecosystems["node"], NODE_REPO)
+    assert env is not None, reasons
+    return env.model_copy(update={"test_timeout_s": 120})
 
 
 @pytest.fixture(scope="session")

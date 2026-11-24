@@ -1,0 +1,196 @@
+# Every language and test tool the factory knows, as data. The code holds no language rules:
+# add or change an ecosystem in factory.toml under [ecosystems.<name>] with the same keys
+# (a new name adds a language, an existing name overrides keys of that one).
+#
+# markers         files in the repo root that pick this ecosystem (first match in file order wins)
+# adapter         optional: "python" also reads pyproject.toml / requirement files
+# framework       a label for reports
+# base_image, setup_commands, test_command, report_format, report_path, test_timeout_s:
+#                 the environment; test_command may use {report} and {select}
+# select          how {select} names a subset of tests: ids | files | dirs | none
+#                 (none = run everything and keep the wanted results)
+# select_all      what {select} becomes for a full run (e.g. "./..." for go)
+# deselect        optional template to skip one test id, e.g. "--deselect {id}" (known failures)
+# helpers         files written into the repo before tests run: path -> bundled file name
+# install         [{if_file, command}]: the first whose if_file exists runs before setup_commands
+#                 (no if_file = default)
+# variants        [{name, if_file, if_contains = {file, pattern}, ...any key above}]: the first
+#                 matching variant overrides keys; if variants exist and none matches, the
+#                 repo needs manual config
+# test_paths      extended regular expressions (POSIX ERE) for test files
+# build_files     file names that control building or test collection
+# build_patterns  extended regular expressions for such files
+# artifacts       build output that is never part of a change (git/glob patterns)
+# error_branch, expected_literal, comment_prefixes, value_return: this language's mutation rules
+#                 for gate G6,#                 added to the shared [mutations] lists at the end of this file
+#
+# test_paths, build_files and build_patterns of every ecosystem are protected from solvers:
+# grading undoes any change an agent makes to them.
+
+[common]
+test_paths = ['(^|/)(tests?|__tests__|specs?|testing)/']
+build_files = []
+build_patterns = []
+artifacts = [".factory/"]
+
+[python]
+markers = ["pyproject.toml", "setup.py", "setup.cfg", "requirements.txt"]
+adapter = "python"
+framework = "pytest"
+base_image = "python:{python}-slim"
+setup_commands = ["pip install -q pytest"]
+test_command = "python -m pytest -p no:cacheprovider -q -o junit_family=xunit1 --junitxml={report} {select}"
+select = "ids"
+deselect = "--deselect {id}"
+report_format = "junit"
+test_paths = ['(^|/)test_[^/]*\.py$', '_test\.py$', '(^|/)conftest\.py$']
+build_files = ["pytest.ini", "tox.ini", "setup.cfg", "pyproject.toml", "sitecustomize.py", "usercustomize.py"]
+build_patterns = ['\.pth$']
+artifacts = ["*.egg-info/", "__pycache__/", "*.pyc", ".pytest_cache/", ".venv/"]
+
+[node]
+markers = ["package.json"]
+framework = "node"
+base_image = "node:22-slim"
+report_format = "junit"
+select = "files"
+test_paths = ['\.(test|spec)\.[cm]?[jt]sx?$']
+build_files = ["package.json"]
+build_patterns = ['(^|/)\.mocharc[^/]*$', '(^|/)(jest|vitest|playwright)\.config\.[cm]?[jt]s$']
+artifacts = ["node_modules/", "dist/", "coverage/"]
+[[node.install]]
+if_file = "package-lock.json"
+command = "npm ci --no-audit --no-fund"
+
+[[node.install]]
+if_file = "yarn.lock"
+command = "corepack enable && yarn install --frozen-lockfile"
+
+[[node.install]]
+if_file = "pnpm-lock.yaml"
+command = "corepack enable && pnpm install --frozen-lockfile"
+
+[[node.install]]
+command = "npm install --no-audit --no-fund"
+
+[[node.variants]]
+name = "jest"
+if_contains = { file = "package.json", pattern = '"jest"' }
+framework = "jest"
+report_format = "jest-json"
+report_path = ".factory/report.json"
+test_command = "npx jest --ci --json --outputFile={report} {select}"
+
+[[node.variants]]
+name = "vitest"
+if_contains = { file = "package.json", pattern = '"vitest"' }
+test_command = "npx vitest run --reporter=junit --outputFile={report} {select}"
+
+[[node.variants]]
+name = "node:test"
+if_contains = { file = "package.json", pattern = 'node --test' }
+helpers = { ".factory/node-junit.mjs" = "node_junit_reporter.mjs" }
+test_command = "node --test --test-reporter=./.factory/node-junit.mjs --test-reporter-destination={report} {select}"
+
+[java]
+markers = ["pom.xml", "build.gradle", "build.gradle.kts"]
+report_format = "junit"
+select = "none"
+test_paths = ['(^|/)src/test/', 'Tests?\.(java|kt)$']
+build_files = ["pom.xml", "build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"]
+artifacts = ["target/", "build/", ".gradle/"]
+
+[[java.variants]]
+name = "maven"
+if_file = "pom.xml"
+framework = "maven"
+base_image = "maven:3.9-eclipse-temurin-17"
+setup_commands = ["mvn -q -B -DskipTests dependency:go-offline test-compile"]
+test_command = "mvn -q -B -o test"
+report_path = "target/surefire-reports/"
+
+[[java.variants]]
+name = "gradle"
+framework = "gradle"
+base_image = "gradle:8-jdk17"
+setup_commands = ["gradle --no-daemon -q testClasses"]
+test_command = "gradle --no-daemon --offline -q test"
+report_path = "build/test-results/test/"
+
+[go]
+markers = ["go.mod"]
+framework = "go"
+base_image = "golang:1.22"
+setup_commands = ["go mod download", "go test -count=1 -run XXX ./..."]
+test_command = "go test -count=1 -json {select}"
+select = "dirs"
+select_all = "./..."
+report_format = "go-json"
+test_paths = ['_test\.go$']
+build_files = ["go.mod", "go.sum"]
+
+[rust]
+markers = ["Cargo.toml"]
+framework = "cargo"
+base_image = "rust:1-slim"
+setup_commands = ["cargo fetch", "cargo test --no-run"]
+test_command = "cargo test --offline"
+select = "none"
+report_format = "cargo-text"
+build_files = ["Cargo.toml", "Cargo.lock"]
+artifacts = ["target/"]
+
+# Mutation operators of gate G6, also as data. Each error_branch rule turns a matching added
+# line (in files matching `files`) into `replace`, a statement that does nothing in that
+# language. expected_literal patterns find the values the hidden tests expect (group 1).
+[mutations]
+comment_prefixes = ["#", "//", "*", "/*", "--"]
+definition_keywords = ["def", "class", "function", "func", "fn", "public", "private", "protected",
+                       "static", "import", "from", "export", "module", "struct", "impl", "package"]
+expected_literal = [
+  '''==\s*(-?\d+(?:\.\d+)?|'[^']*'|"[^"]*")''',
+  '''assert\.(?:strict)?[eE]qual\([^,]+,\s*(-?\d+(?:\.\d+)?|'[^']*'|"[^"]*")''',
+  '''\.toBe\(\s*(-?\d+(?:\.\d+)?|'[^']*'|"[^"]*")\s*\)''',
+  '''assertEquals\(\s*(-?\d+(?:\.\d+)?|"[^"]*")\s*,''',
+  '''assert_eq!\([^,]+,\s*(-?\d+(?:\.\d+)?|"[^"]*")''',
+  '''assert\.Equal\(t,\s*(-?\d+(?:\.\d+)?|"[^"]*")''',
+  '''Assert\.Equal\(\s*(-?\d+(?:\.\d+)?|"[^"]*")\s*,''',
+  '''assert_equal\(?\s*(-?\d+(?:\.\d+)?|'[^']*'|"[^"]*")\s*,''',
+  '''\beq\(\s*(-?\d+(?:\.\d+)?|'[^']*'|"[^"]*")\s*\)''',
+]
+
+# value_return: how a function hands back a value, as (prefix, value, suffix) groups. For a
+# file, the first rule whose `files` match decides (a language's own rules come first).
+[[mutations.value_return]]
+files = ["*"]
+match = '^(\s*return\s+)(.+?)(\s*;?\s*)$'
+
+[[mutations.error_branch]]
+files = ["*.py"]
+match = '^(\s*)raise\b.*$'
+replace = '\1pass'
+
+[[mutations.error_branch]]
+files = ["*.rb", "*.ex", "*.exs"]
+match = '^(\s*)raise\b.*$'
+replace = '\1nil'
+
+[[mutations.error_branch]]
+files = ["*.js", "*.mjs", "*.cjs", "*.jsx", "*.ts", "*.tsx", "*.java", "*.cs", "*.php", "*.dart", "*.scala", "*.cpp", "*.cc", "*.hpp"]
+match = '^(\s*)throw\b.*$'
+replace = '\1;'
+
+[[mutations.error_branch]]
+files = ["*.kt", "*.swift"]
+match = '^(\s*)throw\b.*$'
+replace = '\1'
+
+[[mutations.error_branch]]
+files = ["*.go"]
+match = '^(\s*)panic\(.*$'
+replace = '\1'
+
+[[mutations.error_branch]]
+files = ["*.rs"]
+match = '^(\s*)panic!\(.*$'
+replace = '\1'

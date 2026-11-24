@@ -111,8 +111,10 @@ def test_host_auth_used_only_when_the_provider_is_logged_in(tmp_path, monkeypatc
     auth.parent.mkdir(parents=True)
     auth.write_text(json.dumps({"nvidia": {"type": "api", "key": "k"}}))
     monkeypatch.setenv("HOME", str(tmp_path))
-    assert terminal_ops._host_auth_has("nvidia/qwen/x")
-    assert not terminal_ops._host_auth_has("opencode/free")
+    from factory.config import FactoryConfig
+
+    assert terminal_ops._host_auth_has("nvidia/qwen/x", FactoryConfig())
+    assert not terminal_ops._host_auth_has("opencode/free", FactoryConfig())
 
 
 AGENT_LOG = {

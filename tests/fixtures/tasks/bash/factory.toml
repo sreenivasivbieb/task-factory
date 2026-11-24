@@ -1,0 +1,22 @@
+# Bash is not built into the factory: this table is all it needs (no code).
+[ecosystems.bash]
+markers = ["run_tests.sh"]
+framework = "bash"
+base_image = "bash:5.2"
+test_command = "bash run_tests.sh {report} {select}"
+select = "files"
+report_format = "junit"
+test_paths = ['(^|/)t/']
+build_files = ["run_tests.sh"]
+comment_prefixes = ["#"]
+expected_literal = ['''assert_eq\s+("[^"]*")''']
+
+[[ecosystems.bash.error_branch]]
+files = ["*.sh"]
+match = '^(\s*)return [1-9][0-9]*\s*$'
+replace = '\1:'
+
+# A Bash function hands back a value by printing it, not with `return` (that is a status).
+[[ecosystems.bash.value_return]]
+files = ["*.sh"]
+match = '''^(\s*printf\s+'%s'\s+)(.+?)(\s*)$'''

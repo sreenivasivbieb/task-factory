@@ -15,34 +15,23 @@ from .parsers import PARSERS, STDOUT_FORMATS
 
 log = logging.getLogger("factory.runner")
 
-NODE_REPORTER_PATH = ".factory/node-junit.mjs"
-NODE_REPORTER = (Path(__file__).parent / "node_junit_reporter.mjs").read_text(encoding="utf-8")
-NODE_TEST_COMMAND = (f"node --test --test-reporter=./{NODE_REPORTER_PATH} "
-                     "--test-reporter-destination={report} {select}")
-
-# Frameworks whose command line can select individual files; others run the
-# full suite and the results are filtered afterwards.
-_FILE_SELECT = {"pytest", "node", "jest"}
-
-
 def _file_part(item: str) -> str:
     return item.split("::", 1)[0]
 
 
 def render_select(env: EnvConfig, select: list[str] | None) -> str:
-    """Turn test IDs or file paths into command-line selectors for the framework."""
+    """Turn test IDs or file paths into command-line selectors, as ``env.select`` says."""
     if not select:
-        return "./..." if env.framework == "go" else ""
-    if env.framework == "pytest":
+        return env.select_all
+    if env.select == "ids":
         return " ".join(shlex.quote(s) for s in select)
-    if env.framework in ("node", "jest"):
-        files = dict.fromkeys(_file_part(s) for s in select)
+    files = dict.fromkeys(_file_part(s) for s in select)
+    if env.select == "files":
         return " ".join(shlex.quote(f) for f in files)
-    if env.framework == "go":
-        dirs = dict.fromkeys("./" + (posixpath.dirname(_file_part(s)) or ".") for s in select
-                             if _file_part(s).endswith(".go"))
-        return " ".join(shlex.quote(d) for d in dirs) or "./..."
-    return ""  # maven, gradle, cargo: run all, filter results
+    if env.select == "dirs":
+        dirs = dict.fromkeys("./" + (posixpath.dirname(f) or ".") for f in files)
+        return " ".join(shlex.quote(d) for d in dirs)
+    return env.select_all  # "none": run everything, keep the wanted results
 
 
 def build_command(env: EnvConfig, select: list[str] | None = None) -> str:
@@ -89,8 +78,8 @@ def run_tests(sb: Sandbox, env: EnvConfig, select: list[str] | None = None,
     target = env.report_path.rstrip("/")
     sb.exec(["sh", "-c", f"rm -rf {shlex.quote(target)}; mkdir -p {shlex.quote(posixpath.dirname(target) or '.')}"],
             timeout_s=30)
-    if NODE_REPORTER_PATH in env.test_command:
-        sb.write_file(NODE_REPORTER_PATH, NODE_REPORTER)
+    for path, content in env.helper_files.items():
+        sb.write_file(path, content)
     cmd = build_command(env, select)
     result = sb.exec(["sh", "-c", cmd], timeout_s=env.test_timeout_s, env=env.env_vars or None)
     texts = _read_report(sb, env, result)
@@ -103,7 +92,7 @@ def run_tests(sb: Sandbox, env: EnvConfig, select: list[str] | None = None,
             results.extend(parser(text, roots))
         except ParseError as exc:
             parse_error = str(exc)
-    if select and env.framework in _FILE_SELECT:
+    if select and env.select in ("ids", "files"):  # the IDs then name the selected files
         results = [r for r in results if _matches(r.test_id, select)]
     error = None
     if result.timed_out:

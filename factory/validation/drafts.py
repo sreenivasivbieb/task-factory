@@ -20,16 +20,18 @@ import subprocess
 import tempfile
 from pathlib import Path
 
+from ..ecosystems import registry
 from ..errors import PackageError
 from ..models import GeneratedBy, RepoSpec, TaskDraft, make_task_id
 from ..repo.loader import SYNTHETIC_GIT_ENV, export_clean
 
 
-def _files_under(root: Path) -> dict[str, str]:
+def _files_under(root: Path, ecosystem: str | None = None) -> dict[str, str]:
     if not root.is_dir():
         return {}
     return {p.relative_to(root).as_posix(): p.read_text(encoding="utf-8")
-            for p in sorted(root.rglob("*")) if p.is_file() and "__pycache__" not in p.parts}
+            for p in sorted(root.rglob("*"))
+            if p.is_file() and not registry().ignored(p.relative_to(root).as_posix(), ecosystem)}
 
 
 def diff_from_overlay(spec: RepoSpec, overlay: dict[str, str]) -> str:
@@ -61,7 +63,7 @@ def load_draft_dir(path: Path, spec: RepoSpec, n: int = 1) -> TaskDraft:
     if not meta_path.exists():
         raise PackageError(f"{path} has no task.json")
     meta = json.loads(meta_path.read_text(encoding="utf-8"))
-    after = _files_under(path / "after")
+    after = _files_under(path / "after", spec.language)
     if (path / "solution.diff").exists():
         patch = (path / "solution.diff").read_text(encoding="utf-8")
     else:
@@ -74,7 +76,7 @@ def load_draft_dir(path: Path, spec: RepoSpec, n: int = 1) -> TaskDraft:
         tags=meta.get("tags", []),
         requirements_md=(path / "requirements.md").read_text(encoding="utf-8"),
         solution_patch=patch,
-        test_files=_files_under(path / "tests"),
+        test_files=_files_under(path / "tests", spec.language),
         touched_files=sorted(after) or _touched_from_patch(patch),
         generated_by=GeneratedBy(model=meta.get("model", "human")),
         manual_edit=meta.get("manual_edit", False),

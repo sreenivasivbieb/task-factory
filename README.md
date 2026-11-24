@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `184 tests` · `Harbor-compatible`
+`Python 3.11+` · `Docker` · `185 tests` · `Harbor-compatible`
 
 </div>
 
@@ -501,7 +501,7 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works
 ```sh
 git clone https://github.com/sreenivasivbieb/task-factory && cd task-factory
 uv sync
-uv run pytest                      # 184 tests; Docker tests skip with a message if Docker is missing
+uv run pytest                      # 185 tests; Docker tests skip with a message if Docker is missing
 ```
 
 Run the whole flow on the bundled toy repo:
@@ -532,7 +532,7 @@ uv run factory harness run --agent oracle          # harness sanity check: 100% 
 | `factory review` | Interactive review, one task at a time | ✅ |
 | `factory tasks assign · unassign · assignments` | Assign tasks to a test model | ✅ |
 | `factory harness agents · run · work` (alias `factory bench`) | Run AI coding agents on tasks, score them, branch passing solutions | ✅ |
-| `factory ideas` · `generate` · `report` · `run` | Ideas mined from the repo (TODO/FIXME, stubs, skipped tests, bug-fix history), LLM generation, evidence report, one-shot pipeline | 🔜 M6–M10 (labelled "planned" in `--help`) |
+| (planned) ideas, report, one-shot run | Ideas mined from the repo (TODO/FIXME, stubs, skipped tests, bug-fix history), the evidence report, one command for every step | 🔜 M7, M9, M10 (not in the CLI until built) |
 
 Flags on every command: `--workdir`, `--config`, `--seed`, `--force`, `--dry-run`,
 `--verbose`, `--backend docker|local`. Each step saves JSON under `workdir/` and
@@ -543,15 +543,42 @@ Exit codes: `0` success · `1` pipeline failure · `2` bad usage or config ·
 
 ## Supported languages
 
-| Language | Detected from | Test runner | State |
+No language is written into the code. Everything the pipeline knows about a language
+(how to detect it, image, setup and test commands, how to select tests, the report format,
+which files are tests or test config, build output, and the mutation rules of gate G6) is
+data in [`factory/ecosystems.toml`](factory/ecosystems.toml). A language that is not there
+is added in `factory.toml`, with no code change:
+
+```toml
+[ecosystems.bash]
+markers = ["run_tests.sh"]                 # a file that identifies the repo
+framework = "bash"
+base_image = "bash:5.2"
+test_command = "bash run_tests.sh {report} {select}"
+select = "files"                           # ids | files | dirs | none
+report_format = "junit"                    # junit, jest-json, go-json or cargo-text
+test_paths = ['(^|/)t/']                   # protected from solvers
+build_files = ["run_tests.sh"]
+
+[[ecosystems.bash.error_branch]]           # G6: how to disable an error branch in this language
+files = ["*.sh"]
+match = '^(\s*)return [1-9][0-9]*\s*$'
+replace = '\1:'
+```
+
+| Ecosystem | Detected from | Test runner | State |
 | --- | --- | --- | --- |
 | Python | `pyproject.toml`, `setup.py`, `requirements.txt` | pytest (also runs unittest suites) | end to end |
-| JavaScript / TypeScript | `package.json` | node:test, Jest, Vitest | end to end (node:test) |
-| Java | `pom.xml`, `build.gradle` | Maven Surefire, Gradle | report parser only |
-| Go | `go.mod` | `go test -json` | report parser only |
-| Rust | `Cargo.toml` | `cargo test` | report parser only |
+| JavaScript / TypeScript | `package.json` | node:test, Jest, Vitest (variants picked from `package.json`) | end to end (node:test) |
+| Bash | defined only in `factory.toml` ([fixture](tests/fixtures/tasks/bash/factory.toml)) | a script writing JUnit XML | end to end: inspect, every gate, export, harness, cheat blocked |
+| Java | `pom.xml`, `build.gradle` | Maven Surefire, Gradle | built in, not yet run on a real repo |
+| Go | `go.mod` | `go test -json` | built in, not yet run on a real repo |
+| Rust | `Cargo.toml` | `cargo test` | built in, not yet run on a real repo |
 
-Adding a language means adding one inspector rule and, if needed, one report parser.
+A package records what it needs from its ecosystem (commands, test selection, helper files,
+build output, protected paths), so it is graded the same way on a machine without that
+`factory.toml`. A new *report format* is the one thing that still needs code: one parser in
+`factory/runner/parsers/`. JUnit XML covers most test tools.
 
 ## Progress
 

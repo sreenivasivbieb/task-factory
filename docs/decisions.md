@@ -203,18 +203,41 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   solved it 2/2. Performance views now leave out the sanity agents (oracle, noop) and attempts
   made before a task's last manual edit; the harness difficulty uses the doc's words (`all`,
   `some`, `none`) everywhere.
+- **D56 Languages are data, not code** (user request: "kisi bhi language pe chalna chahiye", no
+  hard-coding; 2026-11-24). `factory/ecosystems.toml` holds every language rule that used to be
+  code: inspector rules (markers, image, setup, test command; Node test tools and Maven/Gradle as
+  `variants`, lock files as `install`), how tests are selected (`select`, replacing branches on
+  the framework name), helper files (the node:test reporter), build output for git excludes and
+  copies (per ecosystem, so `build/` is never dropped from a Python repo), the protected test and
+  config paths, and G6's error-branch, value-return and expected-value rules (per file type: a
+  Bash `return 1` is a status, not a value). `factory.toml` adds or overrides ecosystems under
+  `[ecosystems.<name>]`. `EnvConfig.framework` is now a label and `report_format` any registered
+  parser. A package carries what it needs (`select`, `helper_files`, `artifacts`,
+  `protected_paths`), so grading does not depend on the grader's config; older packages load
+  with the old values. Proof: a Bash repo defined only in factory.toml goes through inspect,
+  every gate (including Bash mutation rules), export, oracle/noop, and a cheat that rewrites
+  the test helper is blocked with no Bash config present (`tests/test_any_language.py`).
+  `harness.stop_after_agent_errors` and the terminal's agent (`harness.default_agent`) are config.
+- **D57 Dead code removed**: CLI placeholders `ideas`, `report`, `run`; empty `report/` and
+  `variation/` packages; the unused `[generation]` config and `gates.task_timeout_s`;
+  `config_hash`, `FeatureIdea`, `SOLVER_VISIBLE`, `AgentSpec.homepage`, `is_test_path`,
+  `run_repeated`. Fields stored in existing `task.toml` files (`repair_attempts`,
+  `solver_results`) stay, or older packages would stop loading. Mutation names in
+  `gates.mutations` are now checked (a typo used to switch a mutant off silently).
 
 ## Limitations
 
 - L1 LocalSandbox has no isolation and allows network; it logs a warning on every use.
-- L2 Go, Maven, Gradle and Cargo support is parser-level only so far (unit-tested on sample
-  reports); only Python and Node run end to end on fixtures.
+- L2 Python, Node (node:test) and Bash (defined only in factory.toml) run end to end on
+  fixtures. The built-in Go, Maven, Gradle and Cargo entries are data that no real repo has
+  gone through yet; their report parsers are unit-tested on sample reports.
 - L3 Mutation testing is heuristic. An equivalent mutant (one that cannot change behaviour,
   e.g. swapping the arguments of a symmetric function) survives and rejects a good task. The
   operator set is configurable (`gates.mutations`) and every survivor is named in the report.
-- L4 `gates.task_timeout_s` is not enforced yet; each test run has its own timeout.
-- L5 Known baseline failures are deselected in the Harbor verifier for pytest only; for other
-  frameworks a repo with known failures would score 0. The "every hidden test ran" check (D44)
+- L4 There is no per-task time limit across gates (the unenforced `gates.task_timeout_s` was
+  removed, D57); each test run has its own timeout (`env.test_timeout_s`).
+- L5 Known baseline failures are deselected in the Harbor verifier only for ecosystems with a
+  `deselect` template (pytest has one); for others a repo with known failures would score 0. The "every hidden test ran" check (D44)
   needs JUnit reports; for Jest JSON, go test and cargo the verifier relies on exit codes.
 - L6 Grading protection (D42) covers files that are known to steer test runs. A determined agent
   could still special-case the tests from inside source code (for example detect pytest and

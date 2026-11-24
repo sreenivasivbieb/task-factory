@@ -8,7 +8,7 @@ import pytest
 from factory.config import FactoryConfig, GatesConfig
 from factory.errors import ConfigError
 from factory.harness.agents import get_agent
-from factory.harness.protect import TEST_PATH_RE
+from factory.ecosystems import registry
 from factory.harness.runner import Harness
 from factory.packaging.harbor import to_harbor
 from factory.packaging.writer import write_package
@@ -48,7 +48,7 @@ def _patch_file(py_spec, tmp_path, overlay: dict[str, str]) -> Path:
 
 
 def is_test_path(path):
-    return bool(re.search(TEST_PATH_RE, path))
+    return bool(re.search(registry().test_re(), path))
 
 
 def test_is_test_path():

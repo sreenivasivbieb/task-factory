@@ -129,7 +129,7 @@ class Validator:
     def _gate_g1(self, draft: TaskDraft) -> GateResult:
         if not draft.solution_patch.strip():
             raise _Reject(RejectCode.PATCH_APPLY_FAIL, "reference patch is empty")
-        protected = protected_in_patch(draft.solution_patch)
+        protected = protected_in_patch(draft.solution_patch, self.env.protected_paths)
         if protected:
             # the grader restores these before grading, so no solver could reproduce this solution
             raise _Reject(RejectCode.SOLUTION_TOUCHES_PROTECTED,

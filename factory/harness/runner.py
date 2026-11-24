@@ -29,7 +29,7 @@ from ..packaging.verify import package_repo, read_package
 from ..runner.test_runner import run_tests
 from ..sandbox.base import BASE_TAG, SCRATCH_DIR, Sandbox, SandboxFactory
 from .agents import AgentSpec
-from .protect import RESTORE_SH
+from .protect import restore_sh
 
 log = logging.getLogger("factory.harness")
 
@@ -42,7 +42,6 @@ Category = str  # resolved | wrong_behaviour | regression | build_error | no_cha
 INFRA_CATEGORIES = {"agent_error", "leak"}
 # Stop a run after this many agent errors in a row (an exhausted quota or a wrong model ID fails
 # every task the same way; continuing only burns time).
-MAX_CONSECUTIVE_AGENT_ERRORS = 2
 
 
 class AttemptResult(Model):
@@ -193,7 +192,7 @@ class Harness:
                 if on_result:
                     on_result(res)
                 consecutive_errors = consecutive_errors + 1 if res.category == "agent_error" else 0
-                if consecutive_errors >= MAX_CONSECUTIVE_AGENT_ERRORS:
+                if consecutive_errors >= self.cfg.harness.stop_after_agent_errors:
                     stopped = (f"{consecutive_errors} agent errors in a row (quota, API key or model ID?); "
                                f"see {adir / 'agent.log.json'}")
                     log.warning("stopping the run: %s", stopped)
@@ -260,7 +259,7 @@ class Harness:
                 res.category = "patch_apply_fail"
                 return res
             sb.exec(["sh", "-c", f"mkdir -p {SCRATCH_DIR}"], timeout_s=10)
-            restored = sb.exec(["sh", "-c", RESTORE_SH], timeout_s=120)
+            restored = sb.exec(["sh", "-c", restore_sh(env.protected_paths)], timeout_s=120)
             res.tests_tampered = [ln for ln in restored.stdout.splitlines() if ln.strip()]
             # the exact change that is graded: the agent's diff minus restored test files
             sb.exec(["sh", "-c", f"git add -A && git diff --cached --binary {BASE_TAG} > {SCRATCH_DIR}/clean.diff "

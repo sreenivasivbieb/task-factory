@@ -10,6 +10,7 @@ import abc
 import hashlib
 import json
 import logging
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -62,13 +63,13 @@ def git_archive(spec: RepoSpec, out_tar: Path) -> Path:
     return out_tar
 
 
-BASE_COMMIT_SH = (
-    "git init -q && git add -A && "
-    "git -c user.name=factory -c user.email=factory@localhost -c commit.gpgsign=false "
-    "commit -q --allow-empty -m base && git tag factory-base && "
-    f"mkdir -p {SCRATCH_DIR} && printf '%s\\n' {SCRATCH_DIR}/ '*.egg-info/' node_modules/ __pycache__/ "
-    "'.pytest_cache/' >> .git/info/exclude"
-)
+def base_commit_sh(env: EnvConfig) -> str:
+    """Commit the starting state, tag it, and keep the ecosystem's build output out of every diff."""
+    excludes = " ".join(shlex.quote(p) for p in dict.fromkeys([f"{SCRATCH_DIR}/", *env.artifacts]))
+    return ("git init -q && git add -A && "
+            "git -c user.name=factory -c user.email=factory@localhost -c commit.gpgsign=false "
+            "commit -q --allow-empty -m base && git tag factory-base && "
+            f"mkdir -p {SCRATCH_DIR} && printf '%s\\n' {excludes} >> .git/info/exclude")
 
 
 def render_dockerfile(env: EnvConfig) -> str:
@@ -83,7 +84,7 @@ def render_dockerfile(env: EnvConfig) -> str:
         "|| adduser -D -u 10001 factory 2>/dev/null || true",
         f"WORKDIR {env.workdir}",
         f"ADD repo.tar {env.workdir}/",
-        f"RUN {BASE_COMMIT_SH}",
+        f"RUN {base_commit_sh(env)}",
     ]
     lines += [f"RUN {cmd}" for cmd in env.setup_commands]
     lines.append(f"RUN (id factory >/dev/null 2>&1 && chown -R factory {env.workdir}) || true")

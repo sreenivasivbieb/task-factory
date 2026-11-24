@@ -30,11 +30,14 @@ from .workspace import Workspace
 
 
 def select_context(root: Path, request: str) -> list[str]:
+    from .ecosystems import registry
+
     workspace = Workspace(root)
+    overview = {"readme.md", *(m.lower() for m in registry().all_markers())}
     words = {word.strip(".,?!:").casefold() for word in request.split() if len(word) > 3}
     ranked = sorted(workspace.files, key=lambda name: (
         -sum(word in name.casefold() for word in words),
-        Path(name).name.lower() not in {"readme.md", "pyproject.toml", "package.json", "go.mod", "cargo.toml"},
+        Path(name).name.lower() not in overview,
         name.count("/"), name,
     ))
     files = []

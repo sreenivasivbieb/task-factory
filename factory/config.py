@@ -55,6 +55,7 @@ class HarnessConfig(_Section):
     default_model: str | None = None  # e.g. "nvidia/qwen/qwen3-coder-480b-a35b-instruct"
     use_host_auth: bool = False  # copy the agent's stored login file into the sandbox
     branches: bool = True  # commit every resolved attempt to a new git branch in workdir/solutions
+    stop_after_agent_errors: int = 2  # an exhausted quota fails every task alike: stop the run early
 
 
 class EnvOverrides(_Section):
@@ -79,6 +80,7 @@ class FactoryConfig(_Section):
     gates: GatesConfig = Field(default_factory=GatesConfig)
     env: EnvOverrides = Field(default_factory=EnvOverrides)
     harness: HarnessConfig = Field(default_factory=HarnessConfig)
+    ecosystems: dict[str, dict] = Field(default_factory=dict)  # add/override languages, see ecosystems.toml
 
     @classmethod
     def load(cls, path: Path | None) -> "FactoryConfig":

@@ -12,7 +12,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 SCHEMA_VERSION = 1
 
@@ -68,16 +68,24 @@ class RepoSpec(Model):
         return self.commit_sha[:7]
 
 
-Framework = Literal["pytest", "node", "jest", "go", "maven", "gradle", "cargo"]
-ReportFormat = Literal["junit", "jest-json", "go-json", "cargo-text"]
+SelectMode = Literal["ids", "files", "dirs", "none"]
+# Older env.json files have no select fields: derive them from the framework label they carry.
+_LEGACY_SELECT = {"pytest": ("ids", "", "--deselect {id}"), "node": ("files", "", None),
+                  "jest": ("files", "", None), "go": ("dirs", "./...", None)}
+_LEGACY_NODE_REPORTER = ".factory/node-junit.mjs"
+_LEGACY_ARTIFACTS = ("*.egg-info/", "node_modules/", "__pycache__/", ".pytest_cache/")  # older node:test packages wrote this file implicitly
 
 
 class EnvConfig(Model):
     """How to build and test a repo inside the sandbox.
 
     ``test_command`` is a shell template. ``{report}`` is replaced by
-    ``report_path`` and ``{select}`` by the quoted test selectors (empty for
-    the full suite). Paths are relative to the repo root.
+    ``report_path`` and ``{select}`` by the quoted test selectors (``select_all`` for
+    the full suite). ``select`` says what a selector is: test ``ids``, test ``files``,
+    the ``dirs`` holding them, or ``none`` (run everything, keep the wanted results).
+    ``helper_files`` (path -> content) are written into the repo before tests run.
+    Paths are relative to the repo root. Nothing here is specific to one language:
+    the values come from ``ecosystems.toml`` or ``factory.toml``.
     """
 
     base_image: str
@@ -86,9 +94,41 @@ class EnvConfig(Model):
     test_timeout_s: int = 600
     env_vars: dict[str, str] = Field(default_factory=dict)
     workdir: str = "/repo"
-    framework: Framework
-    report_format: ReportFormat
+    framework: str  # a label, e.g. "pytest"
+    report_format: str  # a registered report parser, see runner/parsers
     report_path: str = ".factory/report.xml"
+    select: SelectMode | None = None
+    select_all: str = ""
+    deselect: str | None = None  # template to skip one test id, e.g. "--deselect {id}"
+    helper_files: dict[str, str] = Field(default_factory=dict)
+    # build output never part of a change (git exclude in the sandbox); older packages: the old fixed list
+    artifacts: list[str] = Field(default_factory=lambda: list(_LEGACY_ARTIFACTS))
+    # ERE of the test and test-config paths a solver may not change, recorded at inspect time so a
+    # package is graded the same way on a machine without this factory.toml (None: older package)
+    protected_paths: str | None = None
+
+    @field_validator("report_format")
+    @classmethod
+    def _known_format(cls, value: str) -> str:
+        from .runner.parsers import PARSERS
+
+        if value not in PARSERS:
+            raise ValueError(f"unknown report_format {value!r}; known: {sorted(PARSERS)}")
+        return value
+
+    @model_validator(mode="after")
+    def _legacy_select(self) -> "EnvConfig":
+        if not self.helper_files and _LEGACY_NODE_REPORTER in self.test_command:
+            from .ecosystems import helper_text
+
+            self.helper_files = {_LEGACY_NODE_REPORTER: helper_text("node_junit_reporter.mjs")}
+        if self.select is None:
+            select, select_all, deselect = _LEGACY_SELECT.get(self.framework, ("none", "", None))
+            self.select = select
+            self.select_all = self.select_all or select_all
+            if self.deselect is None:
+                self.deselect = deselect
+        return self
 
 
 class InspectResult(Model):

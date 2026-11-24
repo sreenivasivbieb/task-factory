@@ -131,7 +131,9 @@ def test_inspect_unknown(tmp_path):
 def test_inspect_unknown_node_runner(tmp_path):
     (tmp_path / "package.json").write_text(json.dumps({"scripts": {"test": "mocha"}}))
     r = inspect_repo(_spec(tmp_path))
-    assert r.status == "needs_manual_config" and "mocha" in r.reasons[0]
+    assert r.status == "needs_manual_config"
+    assert "jest, vitest, node:test" in r.reasons[0] and "package.json" in r.reasons[0]
+    assert "[ecosystems.node]" in r.reasons[0]  # says how to add the missing setup
 
 
 def test_overrides(tmp_path):

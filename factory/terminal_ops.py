@@ -23,7 +23,6 @@ from .errors import ConfigError
 from .models import RepoSpec
 from .state import Workdir
 
-AGENT = "task-factory"
 MAX_TOOL_OUTPUT_LINES = 12
 MAX_SECTION_CHARS = 40_000
 
@@ -49,6 +48,9 @@ def project_config(root: Path) -> FactoryConfig:
     toml = root / "factory.toml"
     cfg = FactoryConfig.load(toml if toml.exists() else None)
     cfg.workdir = str(project_workdir(root).root)
+    from .ecosystems import configure
+
+    configure(cfg.ecosystems)
     return cfg
 
 
@@ -203,11 +205,11 @@ def delete(root: Path, task_id: str, reason: str) -> dict:
 # --------------------------------------------------------------------------- run
 
 
-def _host_auth_has(model: str) -> bool:
-    """True when the terminal's stored logins (``/connect``) include the model's provider."""
+def _host_auth_has(model: str, cfg: FactoryConfig) -> bool:
+    """True when the agent's stored logins (``/connect`` in the terminal) include the model's provider."""
     from .harness.agents import get_agent
 
-    agent = get_agent(AGENT)
+    agent = get_agent(cfg.harness.default_agent, cfg.harness.agents)
     path = Path(os.path.expanduser(agent.host_auth_file or ""))
     try:
         return model.split("/", 1)[0] in json.loads(path.read_text(encoding="utf-8"))
@@ -224,16 +226,17 @@ def run(root: Path, task_ids: list[str], model: str) -> dict:
     if "/" not in model:
         raise ConfigError("the model must look like provider/model")
     cfg = project_config(root)
+    agent = cfg.harness.default_agent
     wd = Workdir(cfg.workdir)
     store = _store(root)
     for task_id in task_ids:
-        store.assign(task_id, AGENT, model, note="terminal /run-task")
+        store.assign(task_id, agent, model, note="terminal /run-task")
     before = {p.name for p in _run_dirs(wd)}
-    use_auth = _host_auth_has(model)
+    use_auth = _host_auth_has(model, cfg)
     print(f"solving {len(task_ids)} task(s) with {model}"
           + (" using your terminal login" if use_auth else ""))
     args = argparse.Namespace(store=None, k=None, timeout=None, use_host_auth=use_auth, no_branch=False,
-                              only={(t, AGENT, model) for t in task_ids})
+                              only={(t, agent, model) for t in task_ids})
     cmd_harness_work(args, cfg)
     new = [p for p in _run_dirs(wd) if p.name not in before]
     return {"run_id": new[0].name if new else None}

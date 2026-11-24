@@ -378,7 +378,15 @@ changes. A zip or folder without git history gets a *synthetic* commit with a
 fixed author and date, so the same zip always gives the same SHA.
 
 **Inspector.** Detects the environment from marker files and never guesses
-silently:
+silently. It has no language rules of its own: it reads the ecosystem registry,
+`factory/ecosystems.toml`, which `factory.toml` can extend or override under
+`[ecosystems.<name>]` (a new name adds a language). An ecosystem gives markers, image,
+setup and test commands, how `{select}` names tests (`ids`, `files`, `dirs` or `none`),
+the report format, test paths and build files (protected from solvers), build output,
+optional helper files, and its own G6 mutation rules. `install` entries pick a setup
+step by lock file and `variants` pick a test tool by a file or its content (Jest, Vitest
+or node:test from `package.json`; Maven or Gradle). One adapter, `python`, also reads
+`pyproject.toml` for the Python version and the test extra. The built-in data:
 
 | Marker | Base image | Setup | Test command |
 | --- | --- | --- | --- |
@@ -388,8 +396,8 @@ silently:
 | `go.mod` | `golang:1.22` | `go mod download` | `go test -json` |
 | `Cargo.toml` | `rust:1-slim` | `cargo fetch`, build tests | `cargo test --offline` |
 
-Anything else, or an unknown Node test runner, returns `needs_manual_config`
-with the reasons. Every field can be overridden in `factory.toml` under `[env]`.
+Anything else, or a Node repo none of the variants matches, returns
+`needs_manual_config` with the reasons and the files that were checked. Every field can be overridden in `factory.toml` under `[env]`.
 The **smoke check** then builds the image and runs the full suite once; a crash
 at this point is reported, not ignored.
 
@@ -968,7 +976,7 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 
 ## 17. How it is tested
 
-There are 184 tests. Unit tests use two small fixture repositories that are rich
+There are 185 tests. Unit tests use two small fixture repositories that are rich
 enough to show real failure modes:
 
 | Fixture | Contents |
@@ -1012,7 +1020,7 @@ missing; `uv run pytest -m "not docker"` runs the rest in seconds.
 
 | You want to… | Change |
 | --- | --- |
-| Support a new language | add one rule in `repo/inspector.py` (`RULES`), and one parser in `runner/parsers/` if its report format is new |
+| Support a new language | describe it under `[ecosystems.<name>]` in `factory.toml` (keys in `factory/ecosystems.toml`); code only for a new report format (`runner/parsers/`) |
 | Use the official package template | rewrite `packaging/writer.py` and `packaging/verify.py`; nothing else knows the layout |
 | Use Podman instead of Docker | set `sandbox.docker_binary = "podman"` |
 | Tune strictness | `gates.mutations`, `gates.stability_repeats`, `gates.max_known_failure_ratio` in `factory.toml` |

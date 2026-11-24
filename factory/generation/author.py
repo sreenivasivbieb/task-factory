@@ -55,8 +55,7 @@ def _test_files(data: dict):
     if "tests" in data:
         return data["tests"]
     if data and all(isinstance(v, str) for v in data.values()) and all(
-            k.endswith((".py", ".js", ".ts", ".mjs", ".cjs", ".jsx", ".tsx", ".java", ".go", ".rs"))
-            or "/" in k for k in data):
+            "/" in k or "." in k.rsplit("/", 1)[-1] for k in data):
         return data
     return None
 

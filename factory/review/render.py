@@ -16,10 +16,6 @@ from rich.text import Text
 from .store import TaskEntry
 
 STATUS_STYLE = {"pending": "yellow", "approved": "green", "deleted": "red"}
-_LEXERS = {".py": "python", ".js": "javascript", ".mjs": "javascript", ".ts": "typescript", ".go": "go",
-           ".java": "java", ".rs": "rust", ".rb": "ruby", ".kt": "kotlin"}
-
-
 def status_text(status: str) -> Text:
     return Text(status, style=f"bold {STATUS_STYLE.get(status, 'white')}")
 
@@ -90,7 +86,7 @@ def tests(e: TaskEntry) -> Panel:
     parts = []
     for rel in e.meta.test_files:
         p = root / rel
-        lexer = _LEXERS.get(p.suffix, "text")
+        lexer = Syntax.guess_lexer(str(p))
         parts.append(Text(rel, style="bold"))
         parts.append(Syntax(p.read_text(encoding="utf-8"), lexer, theme="ansi_dark", line_numbers=True))
     parts.append(Text("fail_to_pass:", style="bold"))

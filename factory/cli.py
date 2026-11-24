@@ -211,6 +211,9 @@ def _harness_run_args(p: argparse.ArgumentParser) -> None:
 
 def _config(args: argparse.Namespace) -> FactoryConfig:
     cfg = FactoryConfig.load(args.config)
+    from .ecosystems import configure
+
+    configure(cfg.ecosystems)  # languages added or changed in factory.toml
     if args.workdir is not None:
         cfg.workdir = str(args.workdir)
     if args.seed is not None:

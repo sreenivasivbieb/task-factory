@@ -11,16 +11,20 @@ from .errors import PackageError
 
 MAX_FILES = 4_000
 MAX_TEXT = 24_000
-SKIP_DIRS = {
-    ".git", ".venv", ".aws", ".ssh", ".gnupg", ".config", ".local",
-    "node_modules", "__pycache__", "dist", "workdir",
-}
+PRIVATE_DIRS = {".git", ".aws", ".ssh", ".gnupg", ".config", ".local", "workdir"}
+
+
+def _skip_dirs() -> set[str]:
+    from .ecosystems import registry
+
+    build = {p.rstrip("/") for p in registry().artifacts() if p.endswith("/") and "*" not in p}
+    return PRIVATE_DIRS | build
 PRIVATE_SUFFIXES = {".pem", ".key", ".p12", ".pfx"}
 
 
 def visible(path: Path) -> bool:
     return (
-        not any(part in SKIP_DIRS for part in path.parts)
+        not any(part in _skip_dirs() for part in path.parts)
         and not path.name.startswith(".env")
         and path.name not in {".netrc", ".npmrc", "credentials.json", "auth.json"}
         and path.suffix.lower() not in PRIVATE_SUFFIXES
@@ -55,7 +59,7 @@ class Workspace:
 
     def _walk(self):
         for folder, dirs, files in os.walk(self.root):
-            dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in SKIP_DIRS)
+            dirs[:] = sorted(name for name in dirs if not name.startswith(".") and name not in _skip_dirs())
             for name in sorted(files):
                 if not name.startswith("."):
                     yield (Path(folder) / name).relative_to(self.root).as_posix()

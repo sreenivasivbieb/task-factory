@@ -112,8 +112,13 @@ def _refuse_dirty(path: Path) -> None:
 
 
 def _copy_tree(src: Path, dest: Path) -> None:
-    shutil.copytree(src, dest, symlinks=True,
-                    ignore=shutil.ignore_patterns("__pycache__", "node_modules", ".venv", "*.pyc"))
+    """Copy a folder without git history, leaving out its ecosystem's build output (ecosystems.toml)."""
+    from ..ecosystems import registry
+
+    reg = registry()
+    eco = reg.ecosystems.get(reg.detect(src) or "")
+    patterns = [p.rstrip("/") for p in [*reg.common.artifacts, *(eco.artifacts if eco else [])]]
+    shutil.copytree(src, dest, symlinks=True, ignore=shutil.ignore_patterns(*patterns))
 
 
 def _safe_extract(zf: zipfile.ZipFile, out: Path) -> None:

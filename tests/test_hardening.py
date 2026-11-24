@@ -12,7 +12,7 @@ from factory.cli import main
 from factory.config import FactoryConfig, GatesConfig
 from factory.errors import ConfigError
 from factory.harness.agents import get_agent
-from factory.harness.protect import RESTORE_SH, is_protected, patch_paths, protected_in_patch
+from factory.harness.protect import is_protected, patch_paths, protected_in_patch, restore_sh
 from factory.harness.runner import Harness
 from factory.harness.solutions import SolutionRepos
 from factory.models import RejectCode
@@ -96,7 +96,7 @@ def test_restore_sh_undoes_every_kind_of_tampering(tmp_path):
     (repo / "pytest.ini").write_text("[pytest]\naddopts = -k nothing\n")  # added: removed
     (repo / "pyproject.toml").write_text("[project]\nname = 'x'\n[tool.pytest.ini_options]\naddopts = '-x'\n")
     (repo / "my file.py").write_text("ok\n")  # unprotected, with a space: kept
-    out = sh(RESTORE_SH).split()
+    out = sh(restore_sh()).split()
     assert sorted(out) == ["conftest.py", "pyproject.toml", "pytest.ini", "tests/test_a.py", "tests/test_b.py"]
     assert (repo / "src.py").read_text() == "v = 2\n" and (repo / "my file.py").exists()
     assert not (repo / "conftest.py").exists() and not (repo / "pytest.ini").exists()

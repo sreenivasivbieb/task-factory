@@ -7,12 +7,12 @@ every *protected* file the agent touched is undone:
 - protected files the agent added are removed (e.g. a new ``conftest.py`` that
   marks every test as passed, or a new ``pytest.ini`` that deselects tests).
 
-Protected = test files and folders, plus files that control how tests are
-collected or run (``conftest.py``, ``pytest.ini``, ``pyproject.toml``,
-``package.json``, jest/vitest/mocha config, ``sitecustomize.py``, ``*.pth``,
-build files such as ``go.mod`` or ``Cargo.toml``). Dependencies are installed
-when the image is built, never at grading time, so restoring build files cannot
-remove anything the grading run uses.
+Protected = the ``test_paths``, ``build_files`` and ``build_patterns`` of every ecosystem in
+``ecosystems.toml`` (plus any added in factory.toml): test files and folders, and files that
+control how tests are collected or run (``conftest.py``, ``pyproject.toml``, ``package.json``,
+jest config, ``go.mod``, ``Cargo.toml``, ...). Dependencies are installed when the image is
+built, never at grading time, so restoring build files cannot remove anything the grading
+run uses.
 
 The same rule applies to a task's reference solution: it may not change a
 protected file (gate G1), otherwise no solver could pass after the restore.
@@ -26,17 +26,16 @@ from __future__ import annotations
 
 import re
 
-TEST_PATH_RE = (r"(^|/)(tests?|__tests__|specs?|testing)/|(^|/)test_[^/]*\.py$|_test\.(py|go)$"
-                r"|\.(test|spec)\.[cm]?[jt]sx?$|(^|/)conftest\.py$|(^|/)src/test/")
-CONFIG_PATH_RE = (r"(^|/)(pytest\.ini|tox\.ini|setup\.cfg|pyproject\.toml|sitecustomize\.py|usercustomize\.py"
-                  r"|package\.json|\.mocharc[^/]*|(jest|vitest|playwright)\.config\.[cm]?[jt]s"
-                  r"|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|pom\.xml|(build|settings)\.gradle(\.kts)?)$|\.pth$")
-PROTECTED_RE = f"{TEST_PATH_RE}|{CONFIG_PATH_RE}"
-_PROTECTED_RX = re.compile(PROTECTED_RE)
+from ..ecosystems import registry
 
 
-def is_protected(path: str) -> bool:
-    return bool(_PROTECTED_RX.search(path))
+def protected_re() -> str:
+    """POSIX ERE (also Python ``re``) matching every protected path, from the ecosystem registry."""
+    return registry().protected_re()
+
+
+def is_protected(path: str, pattern: str | None = None) -> bool:
+    return bool(re.search(pattern or protected_re(), path))
 
 
 def patch_paths(diff: str) -> list[str]:
@@ -54,22 +53,26 @@ def patch_paths(diff: str) -> list[str]:
     return sorted(out)
 
 
-def protected_in_patch(diff: str) -> list[str]:
-    return [p for p in patch_paths(diff) if is_protected(p)]
+def protected_in_patch(diff: str, pattern: str | None = None) -> list[str]:
+    return [p for p in patch_paths(diff) if is_protected(p, pattern)]
 
 
-# POSIX shell, run in the repo inside a container: undo the agent's changes to protected
-# files relative to the base tag and print each path that was undone.
-RESTORE_SH = (
-    "mkdir -p .factory; git add -A >/dev/null 2>&1; "
-    "git diff --cached --no-renames --name-status factory-base > .factory/changes.txt 2>/dev/null; "
-    "git reset -q >/dev/null 2>&1; "
-    ": > .factory/tampered.txt; "
-    "while IFS=\"$(printf '\\t')\" read -r st path; do "
-    "[ -n \"$path\" ] || continue; "
-    "if printf '%s\\n' \"$path\" | grep -qE '" + PROTECTED_RE + "'; then "
-    "if [ \"$st\" = A ]; then rm -f -- \"$path\"; else git checkout -q factory-base -- \"$path\"; fi; "
-    "printf '%s\\n' \"$path\" >> .factory/tampered.txt; fi; "
-    "done < .factory/changes.txt; "
-    "cat .factory/tampered.txt"
-)
+def restore_sh(pattern: str | None = None) -> str:
+    """POSIX shell, run in the repo inside a container: undo the agent's changes to protected
+    files relative to the base tag and print each path that was undone.
+
+    ``pattern``: the package's own ``env.protected_paths``; default: the current registry."""
+    pattern = (pattern or protected_re()).replace("'", "'\\''")
+    return (
+        "mkdir -p .factory; git add -A >/dev/null 2>&1; "
+        "git diff --cached --no-renames --name-status factory-base > .factory/changes.txt 2>/dev/null; "
+        "git reset -q >/dev/null 2>&1; "
+        ": > .factory/tampered.txt; "
+        "while IFS=\"$(printf '\\t')\" read -r st path; do "
+        "[ -n \"$path\" ] || continue; "
+        "if printf '%s\\n' \"$path\" | grep -qE '" + pattern + "'; then "
+        "if [ \"$st\" = A ]; then rm -f -- \"$path\"; else git checkout -q factory-base -- \"$path\"; fi; "
+        "printf '%s\\n' \"$path\" >> .factory/tampered.txt; fi; "
+        "done < .factory/changes.txt; "
+        "cat .factory/tampered.txt"
+    )
