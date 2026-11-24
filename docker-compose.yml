@@ -43,13 +43,19 @@ services:
       TASK_FACTORY_API_KEY: ${TASK_FACTORY_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      FACTORY_MODEL: ${FACTORY_MODEL:-}
+      FACTORY_MODEL_URL: ${FACTORY_MODEL_URL:-}
+      FACTORY_MODEL_KEY: ${FACTORY_MODEL_KEY:-}
+      FACTORY_MODEL_BACKEND: ${FACTORY_MODEL_BACKEND:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /etc/localtime:/etc/localtime:ro  # run IDs are local times: same clock as runs started on the host
       - ${HOME}/.local/state/task-factory:/home/tf/.local/state/task-factory  # work folders, SWE stores
       - ${HOME}/.local/share/task-factory:/home/tf/.local/share/task-factory:ro  # the engine + its logins
-      - ${TF_WORK:-.}:/work  # the repository you run the factory on
-    working_dir: /work
+      # The repository you run the factory on, at the SAME path as on the host: Harbor (and any tool
+      # that bind-mounts a folder into a sibling container) passes these paths to the host's Docker.
+      - ${TF_WORK:-.}:${TF_WORK:-/work}
+    working_dir: ${TF_WORK:-/work}
 
 volumes:
   mongo-data:

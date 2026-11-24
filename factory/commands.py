@@ -40,7 +40,47 @@ def cmd_load(args: argparse.Namespace, cfg: FactoryConfig) -> int:
     spec = load_repo(args.repo, wd.root, args.commit)
     spec.save(wd.repo_spec)
     print(f"loaded {spec.name} at {spec.commit_sha} (language: {spec.language or 'unknown'})")
+    print("next: factory inspect   (build the environment and run the existing tests)")
     return 0
+
+
+def _inspect_view(spec, result, cfg) -> None:
+    from rich.panel import Panel
+    from rich.table import Table
+
+    from .generation.ui import console
+
+    c = console()
+    env = result.env
+    grid = Table.grid(padding=(0, 2))
+    grid.add_column(style="dim")
+    grid.add_column()
+    grid.add_row("repository", f"{spec.name} @ {spec.commit_sha}")
+    grid.add_row("image", env.base_image)
+    grid.add_row("setup", "\n".join(env.setup_commands) or "-")
+    grid.add_row("tests", f"{env.framework}: {env.test_command}")
+    failing: list[str] = []
+    if result.baseline:
+        counts = result.baseline.counts
+        failing = sorted(result.baseline.ids_with("failed", "error"))
+        parts = [f"[green]{counts.get('passed', 0)} passed[/]",
+                 f"[{'red' if failing else 'dim'}]{counts.get('failed', 0) + counts.get('error', 0)} failed[/]",
+                 f"[dim]{counts.get('skipped', 0)} skipped[/]"]
+        grid.add_row("baseline", " · ".join(parts))
+    else:
+        grid.add_row("baseline", "not run (dry run)")
+    ok = not failing
+    c.print(Panel(grid, title="[bold]environment ok[/]" if ok else "[bold]environment built, tests failing[/]",
+                  title_align="left", border_style="green" if ok else "yellow", expand=False))
+    if failing:
+        c.print(f"[bold yellow]WARNING:[/] {len(failing)} existing test(s) fail at this commit, e.g. {failing[0]}")
+        c.print("  A task must start from a commit where every existing test passes: add what they need")
+        c.print("  (e.g. a system package) to [env] setup_commands in factory.toml, then inspect --force.", markup=False)
+        c.print(f"  With [gates] max_known_failure_ratio = {cfg.gates.max_known_failure_ratio} the gates "
+                + ("reject every task until then." if cfg.gates.max_known_failure_ratio == 0
+                   else "skip these tests (known failures)."), markup=False)
+    else:
+        c.print("[dim]next:[/] factory produce --count 5 --model opencode/beam-free")
 
 
 def cmd_inspect(args: argparse.Namespace, cfg: FactoryConfig) -> int:
@@ -61,8 +101,7 @@ def cmd_inspect(args: argparse.Namespace, cfg: FactoryConfig) -> int:
             log.error("needs manual config: %s", reason)
         return 2
     result.env.save(wd.env_config)
-    counts = result.baseline.counts if result.baseline else "not run (dry run)"
-    print(f"environment ok: {result.env.base_image}, framework {result.env.framework}; baseline {counts}")
+    _inspect_view(spec, result, cfg)
     return 0
 
 
@@ -87,6 +126,177 @@ def cmd_generate(args, cfg) -> int:
     print(f"Generated draft: {draft}")
     args.tasks = draft
     return cmd_validate(args, cfg)
+
+
+class ModelChain:
+    """Ask models in order; when one fails (quota, HTTP error), the next one takes over for good."""
+
+    def __init__(self, models: list[str]) -> None:
+        from .model_client import ModelClient
+
+        self.models = [m for m in models if m] or [None]
+        self.clients = [ModelClient(m) for m in self.models]
+        self.i = 0
+
+    @property
+    def name(self) -> str:
+        return self.clients[self.i].model or "unknown"
+
+    def __call__(self, prompt: str) -> str:
+        from .errors import ModelProviderError
+
+        while True:
+            try:
+                return self.clients[self.i].reply([{"role": "user", "content": prompt}])
+            except ModelProviderError as exc:
+                if self.i + 1 >= len(self.clients):
+                    raise
+                log.warning("%s failed (%s); switching to %s", self.name, exc, self.clients[self.i + 1].model)
+                self.i += 1
+
+
+def _quiet_console_log(args) -> None:
+    """Rich views show the progress: keep INFO lines in the JSONL log only (unless --verbose)."""
+    if getattr(args, "verbose", False):
+        return
+    for h in logging.getLogger("factory").handlers:
+        if not isinstance(h, logging.FileHandler):
+            h.setLevel(logging.WARNING)
+
+
+def _preflight_models(chain: "ModelChain") -> None:
+    """Fail before any work when no model is set or the opencode CLI a model needs is missing."""
+    import shutil
+
+    from .errors import EnvironmentProblem
+
+    if not any(chain.models):
+        raise ConfigError("no model: pass --model (repeatable), e.g. --model opencode/beam-free "
+                          "--model opencode/hy4-flash-free, or set FACTORY_MODEL")
+    for client in chain.clients:
+        cli = getattr(client, "_cli", None)
+        if cli is not None and not (shutil.which(cli.binary) or Path(cli.binary).is_file()):
+            raise EnvironmentProblem(f"{client.model} needs the opencode CLI, which is not installed "
+                                     "(npm install -g @opencode/cli, or set FACTORY_OPENCODE_BIN)")
+
+
+def cmd_produce(args, cfg) -> int:
+    import json
+    import time
+
+    from .generation.pipeline import produce
+    from .generation.ui import ProduceView
+    from .review.authoring import add_task
+    from .sandbox import make_factory
+    from .validation.gates import append_rejection
+
+    spec, env = load_state(cfg)
+    wd = Workdir(cfg.workdir)
+    store = _store_of(args, cfg)
+    chain = ModelChain(args.model or [os.environ.get("FACTORY_MODEL", "")])
+    _preflight_models(chain)
+    factory = make_factory(cfg)
+    if args.dry_run:
+        print(f"produce {args.count} task(s) from {spec.name}@{spec.short_sha} with {', '.join(map(str, chain.models))}")
+        return 0
+    _quiet_console_log(args)
+    view = ProduceView()
+
+    def validate(draft_dir):
+        result = add_task(draft_dir, spec, env, factory, cfg, store, author=f"factory:{chain.name}",
+                          approve=args.approve, log_dir=wd.runs, cache_dir=wd.cache)
+        if result.package is None:
+            append_rejection(wd.rejections, result.report)
+        return result.report, (result.draft.task_id if result.package else None)
+
+    done = {e.meta.idea_id for e in store.entries()}
+    rejected_before: dict[str, str] = {}
+    if not args.retry_rejected:
+        for f in sorted((wd.root / "produce").glob("run-*.json")):
+            try:
+                for o in json.loads(f.read_text(encoding="utf-8")).get("outcomes", []):
+                    if o.get("verdict") == "rejected":
+                        rejected_before[o["idea"]] = o.get("title", o["idea"])
+                    elif o.get("verdict") == "valid":
+                        rejected_before.pop(o["idea"], None)
+            except (OSError, ValueError, KeyError):
+                continue
+    view.header(spec.name, spec.commit_sha, [str(m) for m in chain.models], args.count, args.repairs, args.approve)
+    if done or rejected_before:
+        view.c.print(f"[dim]skipping {len(done)} idea(s) that already have a task and {len(rejected_before)} "
+                     "rejected in earlier runs (--retry-rejected builds those again)[/]")
+    started = time.time()
+    outcomes: list = []
+    errors: list[str] = []
+
+    def collect(o):
+        outcomes.append(o)
+        view.outcome(o)
+
+    def error(message):
+        errors.append(message)
+        view.error(message)
+
+    try:
+        produce(spec, chain, lambda: chain.name, wd.drafts, wd.root / "ideas.json", validate,
+                count=args.count, repairs=args.repairs, max_ideas=args.max_ideas, on_outcome=collect,
+                done=done, on_error=error, on_step=view.step, on_idea=view.idea,
+                rejected_before=rejected_before)
+    finally:  # the record is evidence: write it even when the run stops early
+        view.stop()
+        valid = [o for o in outcomes if o.verdict == "valid"]
+        record = {"repo": spec.name, "commit": spec.commit_sha, "models": [str(m) for m in chain.models],
+                  "started": started, "seconds": round(time.time() - started, 1), "goal": args.count,
+                  "valid": len(valid), "tried": len(outcomes),
+                  "attempts": sum(o.attempts for o in outcomes), "errors": errors,
+                  "outcomes": [o.to_dict() for o in outcomes]}
+        out = wd.root / "produce" / time.strftime("run-%Y%m%d-%H%M%S.json")
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+        view.summary(outcomes, record, out)
+    if args.harbor and valid:
+        from .packaging.harbor import to_harbor
+
+        from .errors import PackageError
+
+        for o in valid:
+            try:
+                view.c.print(f"[dim]harbor[/]    {to_harbor(store.get(o.task_id).path, args.harbor)}")
+            except PackageError as exc:
+                view.error(f"harbor export of {o.task_id}: {exc}")
+        view.c.print(f"[dim]next:[/] factory harbor-check {args.harbor}")
+    elif valid and not args.approve:
+        view.c.print("[dim]next:[/] factory review   (approve the new tasks), then "
+                     "factory tasks publish --format harbor --out DIR")
+    if len(valid) < args.count:
+        return 4
+    return 0
+
+
+def cmd_harbor_check(args, cfg) -> int:
+    import json
+
+    from .generation.ui import console, harbor_row, harbor_table
+    from .packaging.harbor_check import run_matrix
+
+    _quiet_console_log(args)
+    c = console()
+    out = args.out or args.tasks.with_name(args.tasks.name + "-harbor-check")
+    status = c.status("running Harbor (nop, then oracle) on each task", spinner="dots") if c.is_terminal else None
+    if status:
+        status.start()
+    try:
+        rows = run_matrix(args.tasks, out, on_row=lambda r: harbor_row(c, r))
+    finally:
+        if status:
+            status.stop()
+    version = json.loads((out / "summary.json").read_text()).get("harbor_version", "")
+    if rows:
+        harbor_table(c, rows, version)
+    ok = sum(r["ok"] for r in rows)
+    style = "bold green" if rows and ok == len(rows) else "bold red"
+    c.print(f"[{style}]{ok}/{len(rows)} tasks pass the validation matrix[/]; summary: {out / 'summary.md'}")
+    return 0 if rows and ok == len(rows) else 4
 
 
 def _validation_targets(path):

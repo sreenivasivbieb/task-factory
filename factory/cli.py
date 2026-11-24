@@ -46,7 +46,21 @@ def _store(p: argparse.ArgumentParser) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="factory", description="Coding Task Factory")
+    parser = argparse.ArgumentParser(
+        prog="factory", description="Coding Task Factory: turn a repository into validated coding tasks.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""workflow:
+  1. factory load --repo URL_OR_PATH --commit SHA     pin the repository at a commit
+  2. factory inspect                                  build the Docker environment, run the existing tests
+  3. factory produce --count 5 --model MODEL          ideas -> drafts -> gates -> repair -> task store
+  4. factory review                                   approve or delete tasks (or produce --approve)
+  5. factory tasks publish --format harbor --out DIR  export approved tasks for Harbor
+  6. factory harbor-check DIR                         Harbor nop (0.0) and oracle (1.0) on every task
+
+  Example config for pallets/click: examples/click/factory.toml (pass it with --config).
+  Models: opencode/<model> runs through the local opencode CLI (e.g. opencode/beam-free);
+  any other ID goes to FACTORY_MODEL_URL (OpenAI-compatible) with FACTORY_MODEL_KEY.
+  Every command accepts --workdir, --config and --verbose; see 'factory COMMAND --help'.""")
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     # ---------------------------------------------------------------- pipeline
@@ -63,6 +77,25 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--prompt", required=True, help="describe the coding task")
     p.add_argument("--model", help="model ID (defaults to FACTORY_MODEL)")
     p.add_argument("--file", action="append", default=[], help="repo-relative context file (repeatable)")
+    _common(p)
+
+    p = sub.add_parser("produce", help="the automated factory: ideas -> drafts -> gates -> repair -> tasks")
+    p.add_argument("--count", type=int, default=5, help="valid tasks to produce (default 5)")
+    p.add_argument("--model", action="append", default=[],
+                   help="model ID (repeatable: later models take over when one fails or hits its quota); "
+                        "opencode/<model> runs through the local opencode CLI. Default: FACTORY_MODEL")
+    p.add_argument("--repairs", type=int, default=2, help="repair rounds per idea after a rejection (default 2)")
+    p.add_argument("--max-ideas", type=int, default=12, help="ideas to try at most (default 12)")
+    p.add_argument("--approve", action="store_true", help="approve valid tasks (default: pending human review)")
+    p.add_argument("--retry-rejected", action="store_true",
+                   help="build ideas again that the gates rejected in earlier runs (default: skip them)")
+    p.add_argument("--harbor", type=Path, default=None, help="also export the new valid tasks to this Harbor folder")
+    _store(p)
+    _common(p)
+
+    p = sub.add_parser("harbor-check", help="run Harbor's nop (expect 0.0) and oracle (expect 1.0) on Harbor tasks")
+    p.add_argument("tasks", type=Path, help="a Harbor task folder, or a folder of them")
+    p.add_argument("--out", type=Path, default=None, help="logs and summary (default: <tasks>-harbor-check)")
     _common(p)
 
     sub.add_parser("chat", help="launch the Task Factory terminal")
@@ -280,7 +313,7 @@ def main(argv: list[str] | None = None) -> int:
 
     command = "harness" if args.command == "bench" else args.command
     action = "run" if args.command == "bench" else getattr(args, "action", None)
-    name = f"cmd_{command}" + (f"_{action}" if action else "")
+    name = f"cmd_{command}".replace("-", "_") + (f"_{action}" if action else "")
     handler = getattr(commands, name, None)
     try:
         if handler is None:
