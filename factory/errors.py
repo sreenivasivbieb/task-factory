@@ -47,3 +47,7 @@ class ParseError(FactoryError):
 
 class PackageError(FactoryError):
     """A task package is malformed or fails verification."""
+
+
+class ModelProviderError(PackageError):
+    """The model provider failed (HTTP error, quota, no answer): retrying the draft will not help."""

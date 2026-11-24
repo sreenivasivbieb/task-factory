@@ -18,7 +18,7 @@ from pathlib import Path
 
 from ..config import FactoryConfig
 from ..errors import ConfigError
-from ..models import EnvConfig, GeneratedBy, RepoSpec, TaskDraft, ValidationReport
+from ..models import EnvConfig, GeneratedBy, RepairAttempt, RepoSpec, TaskDraft, ValidationReport
 from ..packaging.verify import package_repo, read_package
 from ..packaging.writer import write_package
 from ..sandbox.base import SandboxFactory
@@ -105,7 +105,7 @@ def _check_draft(path: Path) -> None:
 
 def add_task(draft_dir: Path, spec: RepoSpec, env: EnvConfig, factory: SandboxFactory, cfg: FactoryConfig,
              store: TaskStore, *, author: str | None = None, approve: bool = True,
-             log_dir: Path | None = None) -> AddResult:
+             log_dir: Path | None = None, cache_dir: Path | None = None) -> AddResult:
     """Validate a human-written draft; if every gate passes, write it to the store."""
     draft_dir = Path(draft_dir)
     _check_draft(draft_dir)
@@ -125,8 +125,9 @@ def add_task(draft_dir: Path, spec: RepoSpec, env: EnvConfig, factory: SandboxFa
     request = meta.get("request")
     draft.generated_by = GeneratedBy(
         model=model, author=author or meta.get("author") or store.reviewer, session_id=meta.get("session_id"),
-        request=request, prompt_hash=hashlib.sha256(request.encode()).hexdigest()[:16] if request else None)
-    report = Validator(factory, spec, env, cfg.gates, log_dir=log_dir).validate(draft)
+        request=request, prompt_hash=hashlib.sha256(request.encode()).hexdigest()[:16] if request else None,
+        repair_attempts=[RepairAttempt(**a) for a in meta.get("repair_attempts", [])])
+    report = Validator(factory, spec, env, cfg.gates, log_dir=log_dir, cache_dir=cache_dir).validate(draft)
     if report.verdict != "valid":
         return AddResult(report, draft, None)
     pkg = write_package(draft, report, spec, env, store.root)

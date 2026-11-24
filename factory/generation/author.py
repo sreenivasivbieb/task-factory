@@ -101,9 +101,11 @@ def draft_task(spec, drafts: Path, args, *, reply=None) -> Path:
 
         solution = _ask(reply,
             "Draft a benign coding exercise for the user request below. "
-            "Return only JSON with title, requirements (Markdown), and after "
-            "(an object mapping repo-relative source paths to complete replacement text), shaped like "
-            '{"title": "...", "requirements": "...", "after": {"pkg/module.py": "<whole file>"}}. '
+            "Return only JSON with title, requirements (Markdown), and the reference change as "
+            "search/replace edits, shaped like "
+            '{"title": "...", "requirements": "...", ' + EDIT_FORMAT[:-1] + "}. "
+            "(Instead of edits you may give after: an object mapping repo-relative source paths to "
+            "complete replacement text.) "
             "Describe observable behavior. Keep tests out of the reference changes.\n"
             f"Request: {args.prompt}\nBaseline: {baseline}")
         title, requirements = solution.get("title"), solution.get("requirements")
@@ -119,11 +121,12 @@ def draft_task(spec, drafts: Path, args, *, reply=None) -> Path:
             '{"tests": {"tests/test_feature.py": "<whole file>"}}.\n'
             f"Requirements: {requirements}\nBaseline: {baseline}")
 
+        overlay = solution_overlay(solution, repo)
         drafts.mkdir(parents=True, exist_ok=True)
         final_name = None
         with tempfile.TemporaryDirectory(prefix=".generating-", dir=drafts) as staging:
             path = Path(staging)
-            _write_files(path / "after", solution.get("after"), repo, '"after" (the reference change)')
+            _write_files(path / "after", overlay, repo, '"edits" (the reference change)')
             _write_files(path / "tests", _test_files(tests), repo, '"tests" (the hidden tests)')
             (path / "requirements.md").write_text(requirements, encoding="utf-8")
             (path / "task.json").write_text(
@@ -132,3 +135,101 @@ def draft_task(spec, drafts: Path, args, *, reply=None) -> Path:
             final_name = path.with_name(path.name.replace(".generating-", "generated-", 1))
             shutil.move(str(path), str(final_name))
         return final_name
+
+
+# =========================================================================== edits and repo context
+# Large source files (click's core.py is 156 KB) cannot be returned whole by a model, so a model
+# changes code with search/replace edits. They are applied to a clean copy of the pinned commit and
+# turned into the usual after/ overlay, so the draft format and the gates do not change.
+
+EDIT_FORMAT = (
+    '"edits": [{"path": "src/pkg/module.py", "search": "<exact existing lines>", '
+    '"replace": "<new lines>"}], "new_files": {"src/pkg/new_module.py": "<whole file>"}. '
+    "Each search text must be copied exactly from the current file (including indentation) and "
+    "must occur exactly once in it; include a few surrounding lines to make it unique. Edits to "
+    "the same file apply in order."
+)
+
+
+def apply_edits(repo: Path, edits, new_files=None) -> dict[str, str]:
+    """Apply search/replace edits (and whole new files) to ``repo``; returns {path: new content}."""
+    overlay: dict[str, str] = {}
+    if edits is None:
+        edits = []
+    if not isinstance(edits, list) or not all(isinstance(e, dict) for e in edits):
+        raise PackageError("edits must be a list of {path, search, replace} objects")
+    for i, edit in enumerate(edits, start=1):
+        path, search, replace = edit.get("path"), edit.get("search"), edit.get("replace")
+        if not isinstance(path, str) or not isinstance(search, str) or not isinstance(replace, str):
+            raise PackageError(f"edit {i} needs string path, search and replace")
+        rel = _relative(path)
+        if path not in overlay:
+            target = repo / rel
+            if not target.is_file() or target.is_symlink():
+                raise PackageError(f"edit {i}: {path} does not exist in the repository "
+                                   "(put new files in new_files)")
+            overlay[path] = target.read_text(encoding="utf-8")
+        text = overlay[path]
+        if not search.strip():
+            raise PackageError(f"edit {i}: search text for {path} is empty")
+        count = text.count(search)
+        if count != 1:
+            where = "not found" if count == 0 else f"found {count} times"
+            raise PackageError(f"edit {i}: search text {where} in {path}: {search[:120]!r}")
+        overlay[path] = text.replace(search, replace, 1)
+    for path, content in (new_files or {}).items():
+        _relative(path)
+        if not isinstance(content, str):
+            raise PackageError(f"Expected text content for {path}")
+        if (repo / path).exists():
+            raise PackageError(f"new file {path} already exists; change it with edits")
+        overlay[path] = content
+    if not overlay:
+        raise PackageError("the reference solution changes no files")
+    return overlay
+
+
+def solution_overlay(data: dict, repo: Path) -> dict[str, str]:
+    """The reference change from a model reply: ``edits``/``new_files``, or whole files in ``after``."""
+    if data.get("edits") or data.get("new_files"):
+        return apply_edits(repo, data.get("edits"), data.get("new_files"))
+    after = data.get("after")
+    if not isinstance(after, dict) or not after:
+        raise PackageError("The model must return edits (or after) for the reference change")
+    return {k: v for k, v in after.items()}
+
+
+_SIGNATURE = re.compile(
+    r"^\s*(async\s+def|def|class|function|export\s|public\s|private\s|protected\s|static\s|"
+    r"(?:[\w:<>,\s\*&]+\s+)?[\w:~]+\s*\([^;]*\)\s*(?:const)?\s*\{?\s*$)")
+
+
+def outline(text: str, limit: int = 12_000) -> str:
+    """Signature lines of a big source file (with line numbers), for context the model cannot read whole."""
+    out = []
+    for n, line in enumerate(text.splitlines(), start=1):
+        if _SIGNATURE.match(line) and len(line) < 200:
+            out.append(f"{n:5}: {line.rstrip()}")
+    body = "\n".join(out)
+    return body[:limit] + ("\n... (outline truncated)" if len(body) > limit else "")
+
+
+def repo_context(repo: Path, files: list[str], budget: int = 160_000, full_limit: int = 170_000) -> dict:
+    """{path: full text} for the files that fit the budget, {path: outline} for the others."""
+    full, outlines = {}, {}
+    remaining = budget
+    for name in files:
+        try:
+            rel = _relative(name)
+        except PackageError:
+            continue
+        path = repo / rel
+        if not path.is_file() or path.is_symlink():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        if len(text) <= min(remaining, full_limit):
+            full[name] = text
+            remaining -= len(text)
+        else:
+            outlines[name] = outline(text)
+    return {"files": full, "outlines": outlines}
