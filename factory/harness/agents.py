@@ -63,7 +63,6 @@ class AgentSpec(BaseModel):
     env: dict[str, str] = Field(default_factory=dict)
     network: bool = True
     timeout_s: int = 1800
-    homepage: str = ""
     experimental: bool = False
     # Optional: copy the user's own login for this agent into the sandbox (opt-in, --use-host-auth).
     # Only the entry for the model's provider ("nvidia" in "nvidia/...") is copied.
@@ -85,22 +84,20 @@ BUILTIN: dict[str, AgentSpec] = {
         description="Anthropic's Claude Code CLI in headless mode (claude -p).",
         install=[_ENSURE_NODE, "npm install -g @anthropic-ai/claude-code"],
         run='claude -p "$(cat {instruction_file})" --dangerously-skip-permissions --output-format json {model_args}',
-        model_flag="--model {model}", secrets=["ANTHROPIC_API_KEY"], experimental=True,
-        homepage="https://github.com/anthropics/claude-code"),
+        model_flag="--model {model}", secrets=["ANTHROPIC_API_KEY"], experimental=True),
     "codex": AgentSpec(
         description="OpenAI Codex CLI (codex exec).",
         install=[_ENSURE_NODE, "npm install -g @openai/codex"],
         run='codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox {model_args} '
             '"$(cat {instruction_file})"',
-        model_flag="-m {model}", secrets=["OPENAI_API_KEY"], experimental=True,
-        homepage="https://github.com/openai/codex"),
+        model_flag="-m {model}", secrets=["OPENAI_API_KEY"], experimental=True),
     "aider": AgentSpec(
         description="Aider, the AI pair programmer, non-interactive with --message-file.",
         install=[_ENSURE_PIP, _pip("aider-chat")],
         run="aider --yes-always --no-auto-commits --no-show-model-warnings --no-check-update "
             "--message-file {instruction_file} {model_args}",
         model_flag="--model {model}", secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY"],
-        experimental=True, homepage="https://github.com/Aider-AI/aider"),
+        experimental=True),
     "task-factory": AgentSpec(
         description="The Task Factory terminal engine, headless (run --auto). Providers: nvidia/..., "
                     "tokenrouter/..., Zen (free models), amazon-bedrock/qwen...",
@@ -123,8 +120,7 @@ BUILTIN: dict[str, AgentSpec] = {
         model_flag="-m {model}",
         secrets=["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY", "NVIDIA_NIM_API_KEY", "OPENROUTER_API_KEY",
                  *_BEDROCK],
-        env={"MSWEA_CONFIGURED": "true", "MSWEA_COST_TRACKING": "ignore_errors"}, experimental=True,
-        homepage="https://github.com/SWE-agent/mini-swe-agent"),
+        env={"MSWEA_CONFIGURED": "true", "MSWEA_COST_TRACKING": "ignore_errors"}, experimental=True),
 }
 
 

@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from pathlib import Path
 
@@ -7,7 +8,7 @@ import pytest
 from factory.config import FactoryConfig, GatesConfig
 from factory.errors import ConfigError
 from factory.harness.agents import get_agent
-from factory.harness.protect import is_test_path
+from factory.harness.protect import TEST_PATH_RE
 from factory.harness.runner import Harness
 from factory.packaging.harbor import to_harbor
 from factory.packaging.writer import write_package
@@ -44,6 +45,10 @@ def _patch_file(py_spec, tmp_path, overlay: dict[str, str]) -> Path:
     p = tmp_path / "agent.diff"
     p.write_text(diff_from_overlay(py_spec, overlay))
     return p
+
+
+def is_test_path(path):
+    return bool(re.search(TEST_PATH_RE, path))
 
 
 def test_is_test_path():

@@ -169,14 +169,6 @@ class RunSummary(Model):
 TaskKind = Literal["feature", "bugfix", "behavior_change"]
 
 
-class FeatureIdea(Model):
-    id: str
-    title: str
-    description: str
-    source: Literal["docs", "issue", "history", "todo", "llm"]
-    evidence: list[str] = Field(default_factory=list)
-    kind: TaskKind = "feature"
-    tags: list[str] = Field(default_factory=list)
 
 
 class RepairAttempt(Model):

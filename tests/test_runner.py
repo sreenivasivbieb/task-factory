@@ -4,7 +4,13 @@ import pytest
 
 from factory.models import RunSummary, TestResult
 from factory.runner.parsers import parse_cargo_text, parse_go_json, parse_jest_json, parse_junit
-from factory.runner.test_runner import build_command, flaky_ids, run_repeated, run_tests
+from factory.runner.test_runner import build_command, flaky_ids, run_tests
+
+
+def run_repeated(sb, env, n, select):
+    """What gate G5 does: repeat inside one sandbox, then compare."""
+    runs = [run_tests(sb, env, select) for _ in range(n)]
+    return runs, flaky_ids(runs)
 
 REPORTS = Path(__file__).parent / "fixtures" / "reports"
 

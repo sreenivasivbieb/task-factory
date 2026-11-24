@@ -419,7 +419,7 @@ def generations(root: Path, session_id: str | None = None) -> list[dict]:
     return out
 
 
-def last_rejection(wd: Workdir, since: Path | None = None) -> dict:
+def last_rejection(wd: Workdir) -> dict:
     """The reject code and reason of the newest validation report (the draft just checked)."""
     reports = sorted(wd.runs.glob("*/report.json"), key=lambda p: p.stat().st_mtime, reverse=True) \
         if wd.runs.exists() else []

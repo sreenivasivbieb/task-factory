@@ -82,7 +82,7 @@ def generate(request: str, model: str, reply, session_id: str | None = None) -> 
         print("validating the draft in Docker (gates G0-G6)")
         before = {t["task_id"] for t in ops.tasks(root)}
         if cmd_tasks_add(args, cfg):
-            entry.update(ops.last_rejection(wd, args.draft), verdict="rejected")
+            entry.update(ops.last_rejection(wd), verdict="rejected")
             raise PackageError(f"Draft rejected by Task Factory. Draft: {args.draft}")
         new = [t for t in ops.tasks(root) if t["task_id"] not in before]
         entry.update(verdict="valid", task_id=new[0]["task_id"] if new else None)

@@ -122,7 +122,7 @@ def test_real_solution_plus_extra_conftest_still_resolves(local_factory, package
     good = (TASKS / "good_bulk_discount" / "after" / "toyshop" / "pricing.py").read_text()
     patch = tmp_path / "good.diff"
     patch.write_text(diff_from_overlay(py_spec, {"toyshop/pricing.py": good}))
-    summary = _run(local_factory, [package], tmp_path, get_agent("command", cmd=f"git apply {patch} && {CHEAT_CMD}"))
+    _run(local_factory, [package], tmp_path, get_agent("command", cmd=f"git apply {patch} && {CHEAT_CMD}"))
     (grade,) = _grades(tmp_path)
     assert grade["resolved"] and grade["tests_tampered"] == ["conftest.py"]
     solution = next((tmp_path / "harness").glob("*/*/attempt-1/solution.diff")).read_text()

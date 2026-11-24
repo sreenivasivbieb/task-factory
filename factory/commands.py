@@ -409,8 +409,6 @@ def cmd_harness_run(args, cfg) -> int:
     from rich.table import Table
 
     from .harness.agents import get_agent
-    from .harness.runner import Harness
-    from .sandbox import make_factory
 
     agent = get_agent(args.agent, cfg.harness.agents, args.cmd)
     if args.timeout:

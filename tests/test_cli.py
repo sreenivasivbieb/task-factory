@@ -10,5 +10,9 @@ def test_help_works():
     assert "Coding Task Factory" in r.stdout
 
 
-def test_unimplemented_command_exits_2(tmp_path):
-    assert main(["report", "--workdir", str(tmp_path)]) == 2
+def test_unknown_command_exits_2(tmp_path, capsys):
+    import pytest
+
+    with pytest.raises(SystemExit) as info:  # argparse: "invalid choice"
+        main(["report", "--workdir", str(tmp_path)])
+    assert info.value.code == 2 and "invalid choice" in capsys.readouterr().err

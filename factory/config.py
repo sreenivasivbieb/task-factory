@@ -5,9 +5,17 @@ from __future__ import annotations
 import tomllib
 from pathlib import Path
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from .models import sha256_text
+
+ALL_MUTATIONS = [
+    "empty",
+    "revert_half",
+    "flip_comparison",
+    "swap_arguments",
+    "drop_error_branch",
+    "hardcode_expected",
+]
 
 
 class _Section(BaseModel):
@@ -30,13 +38,14 @@ class GatesConfig(_Section):
     stability_repeats: int = 1  # dev default; use 3 for final runs
     mutations: list[str] = Field(default_factory=lambda: ["empty", "flip_comparison", "drop_error_branch"])
     max_known_failure_ratio: float = 0.2
-    task_timeout_s: int = 1800
 
-
-class GenerationConfig(_Section):
-    max_repairs: int = 3
-    max_touched_files: int = 6
-    overgeneration_factor: int = 3
+    @field_validator("mutations")
+    @classmethod
+    def _known_mutations(cls, names: list[str]) -> list[str]:
+        unknown = sorted(set(names) - set(ALL_MUTATIONS))
+        if unknown:  # a typo used to switch a mutant off silently
+            raise ValueError(f"unknown mutation(s) {unknown}; known: {ALL_MUTATIONS}")
+        return names
 
 
 class HarnessConfig(_Section):
@@ -61,14 +70,6 @@ class EnvOverrides(_Section):
     report_path: str | None = None
 
 
-ALL_MUTATIONS = [
-    "empty",
-    "revert_half",
-    "flip_comparison",
-    "swap_arguments",
-    "drop_error_branch",
-    "hardcode_expected",
-]
 
 
 class FactoryConfig(_Section):
@@ -76,7 +77,6 @@ class FactoryConfig(_Section):
     workdir: str = "workdir"
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     gates: GatesConfig = Field(default_factory=GatesConfig)
-    generation: GenerationConfig = Field(default_factory=GenerationConfig)
     env: EnvOverrides = Field(default_factory=EnvOverrides)
     harness: HarnessConfig = Field(default_factory=HarnessConfig)
 
@@ -89,6 +89,3 @@ class FactoryConfig(_Section):
                 return cls()
         data = tomllib.loads(Path(path).read_text(encoding="utf-8"))
         return cls.model_validate(data)
-
-    def config_hash(self) -> str:
-        return sha256_text(self.model_dump_json())[:12]

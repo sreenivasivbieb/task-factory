@@ -138,14 +138,3 @@ def flaky_ids(summaries: list[RunSummary]) -> set[str]:
         if len(statuses) > 1:
             flaky.add(tid)
     return flaky
-
-
-def run_repeated(sb: Sandbox, env: EnvConfig, n: int = 3,
-                 select: list[str] | None = None) -> tuple[list[RunSummary], set[str]]:
-    """Run the tests ``n`` times in one sandbox; return the runs and the flaky test IDs.
-
-    Repeating inside one sandbox catches both random flakiness and tests that
-    depend on state left behind by an earlier run (see docs/decisions.md D10).
-    """
-    runs = [run_tests(sb, env, select) for _ in range(n)]
-    return runs, flaky_ids(runs)

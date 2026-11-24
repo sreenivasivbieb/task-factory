@@ -50,7 +50,6 @@ CHECKSUMS = "checksums.txt"
 CHECKSUMMED = (INSTRUCTION, TASK_TOML, "solution/", "tests/", "environment/")
 
 # What the solver may see. Everything else stays hidden.
-SOLVER_VISIBLE = (INSTRUCTION,)
 
 
 def _run_script(env: EnvConfig, test_files: list[str]) -> str:

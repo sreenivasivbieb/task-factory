@@ -6,7 +6,8 @@ Exit codes: 0 success, 1 pipeline failure, 2 bad usage/config,
 
 Command groups::
 
-    factory load | inspect | validate | export | ideas | generate | report | run
+    factory load | inspect | generate | validate | export
+    factory chat | terminal   (the Task Factory terminal)
     factory tasks   list | show | approve | delete | restore | new | add | edit | publish | summary
                     assign | unassign | assignments
     factory review  (interactive)
@@ -25,7 +26,7 @@ from .errors import ConfigError, FactoryError
 
 log = logging.getLogger("factory.cli")
 
-EXIT_OK, EXIT_FAIL, EXIT_USAGE, EXIT_ENV, EXIT_NO_TASKS = 0, 1, 2, 3, 4
+EXIT_FAIL, EXIT_USAGE = 1, 2  # other codes come from FactoryError.exit_code
 
 
 def _common(p: argparse.ArgumentParser) -> None:
@@ -57,9 +58,6 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("inspect", help="detect environment, build image, run baseline")
     _common(p)
 
-    p = sub.add_parser("ideas", help="(planned, M7) mine ideas from TODOs, history, docs; writes ideas.json")
-    p.add_argument("--limit", type=int, default=30)
-    _common(p)
 
     p = sub.add_parser("generate", help="draft and validate a task using a configured model")
     p.add_argument("--prompt", required=True, help="describe the coding task")
@@ -79,13 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--out", type=Path, default=None, help="folder (default: the task store)")
     _common(p)
 
-    p = sub.add_parser("report", help="(planned, M9) build the evidence report")
-    _common(p)
 
-    p = sub.add_parser("run", help="(planned, M10) all steps in order")
-    p.add_argument("--repo", required=True)
-    p.add_argument("--count", type=int, default=10)
-    _common(p)
 
     # ---------------------------------------------------------------- human review
     tasks = sub.add_parser("tasks", help="look at, approve, delete, add and publish task packages")

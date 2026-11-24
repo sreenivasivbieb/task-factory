@@ -32,12 +32,7 @@ CONFIG_PATH_RE = (r"(^|/)(pytest\.ini|tox\.ini|setup\.cfg|pyproject\.toml|sitecu
                   r"|package\.json|\.mocharc[^/]*|(jest|vitest|playwright)\.config\.[cm]?[jt]s"
                   r"|go\.mod|go\.sum|Cargo\.toml|Cargo\.lock|pom\.xml|(build|settings)\.gradle(\.kts)?)$|\.pth$")
 PROTECTED_RE = f"{TEST_PATH_RE}|{CONFIG_PATH_RE}"
-_TEST_RX = re.compile(TEST_PATH_RE)
 _PROTECTED_RX = re.compile(PROTECTED_RE)
-
-
-def is_test_path(path: str) -> bool:
-    return bool(_TEST_RX.search(path))
 
 
 def is_protected(path: str) -> bool:
