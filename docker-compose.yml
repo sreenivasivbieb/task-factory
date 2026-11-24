@@ -45,6 +45,7 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/localtime:/etc/localtime:ro  # run IDs are local times: same clock as runs started on the host
       - ${HOME}/.local/state/task-factory:/home/tf/.local/state/task-factory  # work folders, SWE stores
       - ${HOME}/.local/share/task-factory:/home/tf/.local/share/task-factory:ro  # the engine + its logins
       - ${TF_WORK:-.}:/work  # the repository you run the factory on
