@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `183 tests` · `Harbor-compatible`
+`Python 3.11+` · `Docker` · `184 tests` · `Harbor-compatible`
 
 </div>
 
@@ -140,6 +140,15 @@ Agent errors (an exhausted quota, a bad login) are shown apart and never counted
 as a model failing a task. Zen's free models work for every command.
 
 `factory generate` also supports direct use with a compatible model provider.
+
+### Example tasks
+
+[`examples/toyshop/`](examples/toyshop/README.md) has three hand-written drafts that
+went through the whole pipeline: an end-to-end checkout feature (9 hidden tests),
+a security fix against price and receipt tampering (27) and a scalability fix with
+a load test (4). All pass the strict gates (3 repeats, every mutant caught), and
+free models solved them in Docker after one clarification that a failing model
+exposed.
 
 ## What makes a task "valid"
 
@@ -451,8 +460,8 @@ Each attempt is graded into one category: `resolved`, `wrong_behaviour`,
 `regression`, `build_error`, `no_change`, `agent_error` (the agent failed, for
 example a bad model ID), `timeout` or `patch_apply_fail`. The summary reports
 **resolved@k**, pass rate, time and cost (when the agent reports it), and a
-difficulty per task: *easy* (every attempt solved it), *medium* (some) or
-*unsolved*. An unsolved task gets a note in the review log, because it may be
+difficulty per task, the design doc's tag: *all* (every attempt solved it),
+*some* or *none*. A task no attempt solved gets a note in the review log, because it may be
 unsolvable and deserves a human look.
 
 A failure of the *setup* is not a verdict on the task. If every attempt ends in
@@ -492,7 +501,7 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works
 ```sh
 git clone https://github.com/sreenivasivbieb/task-factory && cd task-factory
 uv sync
-uv run pytest                      # 183 tests; Docker tests skip with a message if Docker is missing
+uv run pytest                      # 184 tests; Docker tests skip with a message if Docker is missing
 ```
 
 Run the whole flow on the bundled toy repo:

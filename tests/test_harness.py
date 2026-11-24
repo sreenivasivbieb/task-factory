@@ -72,10 +72,10 @@ def test_secret_required(local_factory, package, tmp_path, monkeypatch):
 
 def test_oracle_resolves_noop_does_not(local_factory, package, tmp_path):
     summary, _ = _run(local_factory, package, tmp_path, get_agent("oracle"))
-    assert summary.resolved_at_k == 1.0 and summary.per_task[0].difficulty == "easy"
+    assert summary.resolved_at_k == 1.0 and summary.per_task[0].difficulty == "all"
     summary, _ = _run(local_factory, package, tmp_path, get_agent("noop"), k=2)
     assert summary.resolved_at_k == 0.0 and summary.categories == {"no_change": 2}
-    assert summary.per_task[0].difficulty == "unsolved"
+    assert summary.per_task[0].difficulty == "none"
 
 
 def test_command_agent_wrong_behaviour(local_factory, package, py_spec, tmp_path):

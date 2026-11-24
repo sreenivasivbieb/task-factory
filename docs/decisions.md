@@ -193,6 +193,16 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   keeps it. Validation reports and `task.toml` now record the sandbox backend (`docker` or
   `local`): the two packages in `submission/` were validated on Windows without it being
   recorded, and were re-verified here in Docker (2/2 valid).
+- **D55 Whole-pipeline run on hand-written tasks** (2026-11-24, `examples/toyshop/`): three drafts
+  (end-to-end feature, security fix, scalability fix with a load test) through strict gates,
+  oracle/noop, four free models with k=2, publish and re-verification from disk (5/5 valid).
+  What it found: G6 caught a test gap (a zero price) and an equivalent mutant (swapped arguments
+  of a multiplication; the reference now uses keyword arguments). A model that failed 1 of 9
+  tests (flint-40b, twice) was right: the requirements said "an int" while a test rejected
+  `True`; the task was fixed through `tasks edit` (disclosed as a manual edit) and the model then
+  solved it 2/2. Performance views now leave out the sanity agents (oracle, noop) and attempts
+  made before a task's last manual edit; the harness difficulty uses the doc's words (`all`,
+  `some`, `none`) everywhere.
 
 ## Limitations
 

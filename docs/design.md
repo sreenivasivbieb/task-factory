@@ -897,9 +897,9 @@ mini-swe-agent.
 
 The run summary gives **resolved@k** (tasks solved in at least one of k
 attempts), pass rate over all attempts, mean agent time, total cost when the
-agent reports it, and a difficulty per task: `easy` (all attempts), `medium`
-(some), `unsolved` (none) or `error` (every attempt was an agent error, so the
-model never really tried). Unsolved tasks get a note in the review log; `error`
+agent reports it, and a difficulty per task, the design doc's tag: `all`
+(solved by every attempt), `some`, `none` or `error` (every attempt was an agent
+error, so the model never really tried). Tasks no attempt solved get a note in the review log; `error`
 tasks do not.
 
 The `oracle` and `noop` agents are the harness's own sanity checks: on a valid
@@ -968,7 +968,7 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 
 ## 17. How it is tested
 
-There are 183 tests. Unit tests use two small fixture repositories that are rich
+There are 184 tests. Unit tests use two small fixture repositories that are rich
 enough to show real failure modes:
 
 | Fixture | Contents |

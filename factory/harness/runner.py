@@ -323,7 +323,8 @@ def summarize(run_id: str, agent: str, model: str | None, k: int, results: list[
         if not n and all(r.category in INFRA_CATEGORIES for r in rs):
             difficulty = "error"  # the model never really tried: not evidence that the task is hard
         else:
-            difficulty = "easy" if n == len(rs) else ("medium" if n else "unsolved")
+            # the design doc's tag: solved by all attempts, some, or none (same words as /benchmark)
+            difficulty = "all" if n == len(rs) else ("some" if n else "none")
         per_task.append(TaskScore(task_id=task_id, attempts=len(rs), resolved=n, difficulty=difficulty))
     categories: dict[str, int] = {}
     for r in results:

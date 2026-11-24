@@ -445,7 +445,7 @@ def cmd_harness_run(args, cfg) -> int:
         t.add_column(col)
     for ts in summary.per_task:
         t.add_row(ts.task_id, f"{ts.resolved}/{ts.attempts}", ts.difficulty)
-        if store is not None and ts.difficulty == "unsolved" and agent.kind == "command":
+        if store is not None and ts.difficulty == "none" and agent.kind == "command":
             store.note(ts.task_id, f"unsolved by {agent.name} in {ts.attempts} attempt(s); check it is solvable")
     console.print(t)
     if summary.stopped_early:

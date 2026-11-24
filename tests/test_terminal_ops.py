@@ -265,3 +265,26 @@ def test_overview_and_benchmark_from_runs(project):
     assert row["cells"]["zen/a"]["resolved"] == 1 and row["cells"]["zen/a"]["attempts"] == 2
     assert row["cells"]["zen/b"] == {"attempts": 0, "resolved": 0, "agent_errors": 1, "category": "agent_error",
                                      "run_id": "20261123-110000-task-factory", "attempt": 1}
+
+
+def test_performance_ignores_sanity_agents_and_attempts_before_an_edit(project):
+    terminal_ops.setup(project)
+    task_id = _add_good_task(project)
+    wd = terminal_ops.project_workdir(project)
+
+    def run(run_id, agent, model, resolved):
+        d = wd.harness / run_id
+        (d / task_id / "attempt-1").mkdir(parents=True)
+        (d / "results.jsonl").write_text(json.dumps({
+            "task_id": task_id, "agent": agent, "model": model, "attempt": 1, "resolved": resolved,
+            "category": "resolved" if resolved else "wrong_behaviour", "agent_duration_s": 1.0}) + "\n")
+
+    run("20200101-000000-task-factory", "task-factory", "zen/a", False)  # before the edit below
+    run("20991231-000000-noop", "noop", None, False)
+    run("20991231-000001-oracle", "oracle", None, True)
+    run("20991231-000002-task-factory", "task-factory", "zen/a", True)
+    terminal_ops._store(project).record(task_id, "edit", "clarified the requirements")
+    o = terminal_ops.overview(project)
+    assert [m["model"] for m in o["models"]] == ["zen/a"]
+    assert (o["performance"]["attempts"], o["performance"]["resolved"]) == (1, 1)
+    assert o["performance"]["difficulty"] == {"all": 1, "some": 0, "none": 0}

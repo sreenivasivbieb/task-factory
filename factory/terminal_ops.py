@@ -452,13 +452,41 @@ def _tokens(adir: Path) -> int | None:
     return total if seen else None
 
 
+SANITY_AGENTS = {"oracle", "noop"}  # check the harness itself; never counted as AI performance
+
+
+def _run_started(run_id: str) -> float | None:
+    import time
+
+    try:
+        return time.mktime(time.strptime(run_id[:15], "%Y%m%d-%H%M%S"))
+    except ValueError:
+        return None
+
+
 def _attempt_rows(root: Path) -> list[dict]:
-    """Every graded attempt of every run, oldest run first, with its run id and token count."""
+    """Every graded AI attempt, oldest run first, with its run id and token count.
+
+    Left out: the sanity agents, and attempts on a task made before its last manual edit
+    (they graded a different version of the task).
+    """
     from .harness.runner import INFRA_CATEGORIES
 
+    edited: dict[str, float] = {}
+    store = _store(root)
+    if store.root.exists():
+        for e in store.entries():
+            times = [ev.ts for ev in e.events if ev.action == "edit"]
+            if times:
+                edited[e.task_id] = max(times)
     rows = []
     for run_dir in reversed(_run_dirs(project_workdir(root))):
+        started = _run_started(run_dir.name)
         for r in _results(run_dir):
+            if r.get("agent") in SANITY_AGENTS:
+                continue
+            if started is not None and started < edited.get(r["task_id"], 0):
+                continue
             rows.append({**r, "run_id": run_dir.name, "infra": r.get("category") in INFRA_CATEGORIES,
                          "tokens_total": _tokens(run_dir / r["task_id"] / f"attempt-{r['attempt']}")})
     return rows
