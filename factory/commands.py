@@ -301,16 +301,25 @@ def cmd_tasks_publish(args, cfg) -> int:
     store = _store_of(args, cfg)
     wanted = [e for e in store.entries() if e.status == "approved" or (args.include_pending and e.status == "pending")]
     out = Path(args.out)
-    if not wanted:
-        print("nothing to publish: no approved tasks (approve with 'factory review' or 'factory tasks approve')")
-        return 4
     if out.is_dir():
-        # a republish must not leave behind tasks that were deleted or unapproved since the last one
+        # A republish must not leave behind tasks that were deleted or unapproved since the last one,
+        # but it only ever removes tasks this store knows: a folder from another store, another
+        # machine or an empty/wrong --store is never touched.
         keep = {e.task_id for e in wanted}
-        stale = [d for d in sorted(out.iterdir()) if d.is_dir() and d.name not in keep and (d / "task.toml").exists()]
+        known = {e.task_id for e in store.entries()}
+        stale = [d for d in sorted(out.iterdir())
+                 if d.is_dir() and d.name in known and d.name not in keep and (d / "task.toml").exists()]
         for d in stale:
             shutil.rmtree(d)
             print(f"removed   {d.name}  (no longer approved)")
+        unknown = [d.name for d in sorted(out.iterdir()) if d.is_dir() and d.name not in known
+                   and (d / "task.toml").exists()]
+        if unknown:
+            print(f"kept      {len(unknown)} task folder(s) this store does not know: {', '.join(unknown[:5])}"
+                  + (" …" if len(unknown) > 5 else ""))
+    if not wanted:
+        print("nothing to publish: no approved tasks (approve with 'factory review' or 'factory tasks approve')")
+        return 4
     out.mkdir(parents=True, exist_ok=True)
     for e in wanted:
         if args.format == "harbor":

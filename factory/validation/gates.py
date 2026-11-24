@@ -244,7 +244,8 @@ class Validator:
     def validate(self, draft: TaskDraft) -> ValidationReport:
         """Run every gate; the first failure rejects with its reject code."""
         gates: list[GateResult] = []
-        report = ValidationReport(task_id=draft.task_id, verdict="rejected")
+        report = ValidationReport(task_id=draft.task_id, verdict="rejected",
+                                  backend=getattr(self.factory, "backend_name", None))
         current = "G0"
         start = time.monotonic()
         try:

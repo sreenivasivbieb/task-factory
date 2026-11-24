@@ -243,10 +243,12 @@ class ValidationReport(Model):
     mutation_score: float | None = None
     mutants_run: int = 0
     mutants_caught: int = 0
+    backend: str | None = None  # sandbox the gates ran in: "docker" (isolated) or "local" (no isolation)
 
 
 class ValidationSummary(Model):
     verdict: Literal["valid", "rejected"]
+    backend: str | None = None
     gates: list[str] = Field(default_factory=list)
     mutation_score: float | None = None
     mutants_run: int = 0

@@ -184,6 +184,15 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   or not, goes to `generations.jsonl`. `/setup` pins and inspects a new commit in a staging
   folder and keeps the working setup when that fails (seen live: PyPI unreachable). Generated
   requirements always open with `# <title>`.
+- **D54 Review of a teammate's fixes** (2026-11-24, commits 1e3bc30..d3fe292): Windows support
+  (editor quoting, path parsing, no `killpg`, `shutil.move` for drafts) and the crash fixes were
+  kept. Their publish fix stopped an empty store from wiping a submission folder, but also undid
+  D48 (a republish left deleted tasks behind). Both now hold: publish removes only stale folders
+  of tasks the store knows, even when nothing is approved, and keeps unknown ones. The tar
+  safety filter is chosen by feature (`tarfile.data_filter`), not by version, so Python 3.11.4+
+  keeps it. Validation reports and `task.toml` now record the sandbox backend (`docker` or
+  `local`): the two packages in `submission/` were validated on Windows without it being
+  recorded, and were re-verified here in Docker (2/2 valid).
 
 ## Limitations
 

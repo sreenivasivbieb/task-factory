@@ -135,6 +135,8 @@ class Sandbox(abc.ABC):
 
 
 class SandboxFactory(abc.ABC):
+    backend_name = "unknown"  # recorded in every validation report
+
     @abc.abstractmethod
     def build_image(self, spec: RepoSpec, env: EnvConfig) -> ImageRef:
         """Build (or reuse) the image for a pinned repo and environment."""

@@ -712,7 +712,9 @@ manual edit with its reason. That file is the disclosure the organizers ask for.
 
 Publishing again into the same folder removes task folders that are no longer
 approved (deleted or unapproved since the last publish), so a submission folder
-never keeps a task a reviewer threw out. In the other direction, `factory
+never keeps a task a reviewer threw out. It only removes tasks the store knows:
+a folder from another store or another machine, or a publish from an empty or
+wrong `--store`, never deletes anything (it lists those folders as kept). In the other direction, `factory
 export` never overwrites a package that is already in the store (a reviewer may
 have approved or edited it); `--force` does.
 
@@ -966,7 +968,7 @@ task never goes stale. Milestone M6 will produce the same `TaskDraft` from an LL
 
 ## 17. How it is tested
 
-There are 181 tests. Unit tests use two small fixture repositories that are rich
+There are 183 tests. Unit tests use two small fixture repositories that are rich
 enough to show real failure modes:
 
 | Fixture | Contents |

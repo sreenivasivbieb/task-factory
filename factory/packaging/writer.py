@@ -78,7 +78,8 @@ def package_meta(draft: TaskDraft, report: ValidationReport, spec: RepoSpec, env
         fail_to_pass=report.fail_to_pass, pass_to_pass=report.pass_to_pass,
         known_failures=report.known_failures, manual_edit=draft.manual_edit,
         manual_edit_reason=draft.manual_edit_reason, environment=env, generated_by=draft.generated_by,
-        validation=ValidationSummary(verdict=report.verdict, gates=[g.gate for g in report.gates],
+        validation=ValidationSummary(verdict=report.verdict, backend=report.backend,
+                                     gates=[g.gate for g in report.gates],
                                      mutation_score=report.mutation_score, mutants_run=report.mutants_run,
                                      mutants_caught=report.mutants_caught),
     )

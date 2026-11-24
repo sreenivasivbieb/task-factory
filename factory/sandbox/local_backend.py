@@ -28,6 +28,8 @@ _WARNING = "LocalSandbox has NO isolation (no container, network allowed); use o
 
 
 class LocalSandboxFactory(SandboxFactory):
+    backend_name = "local"
+
     def __init__(self, cache_dir: Path, cfg: SandboxConfig | None = None) -> None:
         self.cache_dir = Path(cache_dir) / "local-images"
         self.cfg = cfg or SandboxConfig()
@@ -42,7 +44,8 @@ class LocalSandboxFactory(SandboxFactory):
         try:
             tar_path = git_archive(spec, tmp.parent / f"{tmp.name}.tar")
             with tarfile.open(tar_path) as tf:
-                tf.extractall(tmp, **({"filter": "data"} if sys.version_info >= (3, 12) else {}))
+                # the "data" filter blocks unsafe paths; it exists from 3.11.4/3.12 (check the feature, not the version)
+                tf.extractall(tmp, **({"filter": "data"} if hasattr(tarfile, "data_filter") else {}))
             tar_path.unlink()
             setup = env.setup_commands if self.cfg.local_run_setup else []
             if env.setup_commands and not setup:

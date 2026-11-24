@@ -259,3 +259,23 @@ def test_pin_image_resolves_a_digest(monkeypatch):
     assert f.pin_image("python:3.11-slim@sha256:" + "b" * 64).endswith("b" * 64)  # already pinned
     f.cfg = SandboxConfig(pin_base_image=False)
     assert f.pin_image("python:3.11-slim") == "python:3.11-slim"
+
+
+def test_publish_never_removes_folders_the_store_does_not_know(tmp_path, capsys):
+    """An empty or different store must not wipe a submission folder (seen: publishing from the wrong store)."""
+    out = tmp_path / "submission"
+    foreign = out / "someone-elses-task-001"
+    foreign.mkdir(parents=True)
+    (foreign / "task.toml").write_text('task_id = "someone-elses-task-001"\n')
+    empty_store = tmp_path / "empty-store"
+    empty_store.mkdir()
+    assert main(["tasks", "publish", "--out", str(out), "--store", str(empty_store)]) == 4
+    assert foreign.exists()
+    assert "does not know" in capsys.readouterr().out
+
+
+def test_reports_and_packages_record_the_backend(package):
+    from factory.review.store import read_meta
+
+    assert read_meta(package).validation.backend == "local"  # the fixture validates with the local backend
+    assert json.loads((package / "validation" / "report.json").read_text())["backend"] == "local"

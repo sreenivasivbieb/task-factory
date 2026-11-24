@@ -30,6 +30,8 @@ def _file_digest(path: Path) -> str:
     return digest.hexdigest()
 
 class DockerSandboxFactory(SandboxFactory):
+    backend_name = "docker"
+
     def __init__(self, cfg: SandboxConfig | None = None) -> None:
         self.cfg = cfg or SandboxConfig()
         self.bin = self.cfg.docker_binary

@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `181 tests` · `Harbor-compatible`
+`Python 3.11+` · `Docker` · `183 tests` · `Harbor-compatible`
 
 </div>
 
@@ -492,7 +492,7 @@ You need Python 3.11+, [uv](https://docs.astral.sh/uv/) and Docker (Podman works
 ```sh
 git clone https://github.com/sreenivasivbieb/task-factory && cd task-factory
 uv sync
-uv run pytest                      # 181 tests; Docker tests skip with a message if Docker is missing
+uv run pytest                      # 183 tests; Docker tests skip with a message if Docker is missing
 ```
 
 Run the whole flow on the bundled toy repo:
