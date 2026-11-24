@@ -144,17 +144,17 @@ def test_missing_docker_binary():
 
 
 @pytest.mark.docker
-def test_derived_image_copies_files(docker_factory, py_spec, py_env_docker, tmp_path):
+def test_files_are_mounted_read_only_from_content_named_volumes(docker_factory, py_spec, py_env_docker, tmp_path):
     tool = tmp_path / "tool"
-    tool.write_text("#!/bin/sh\necho copied-tool\n")
+    tool.write_text("#!/bin/sh\necho mounted-tool\n")
     base = docker_factory.build_image(py_spec, py_env_docker)
-    image = docker_factory.build_derived_image(base, "copy-test", [], {"/usr/local/bin/copied-tool": tool})
-    assert image.tag != base.tag
-    with docker_factory.new_sandbox(image) as sb:
-        res = sb.exec(["copied-tool"], timeout_s=30)
-    assert res.exit_code == 0 and res.stdout.strip() == "copied-tool"
-    tool.write_text("#!/bin/sh\necho changed\n")
-    assert docker_factory.build_derived_image(base, "copy-test", [], {"/usr/local/bin/copied-tool": tool}).tag != image.tag
+    assert docker_factory.build_derived_image(base, "no-install", []) == base  # nothing to install: no image
+    with docker_factory.new_sandbox(base, files={"/opt/tools/tool": tool}) as sb:
+        res = sb.exec(["/opt/tools/tool"], timeout_s=30)
+    assert res.exit_code == 0 and res.stdout.strip() == "mounted-tool"
+    tool.write_text("#!/bin/sh\necho changed\n")  # new content: a new volume, never a stale copy
+    with docker_factory.new_sandbox(base, files={"/opt/tools/tool": tool}) as sb:
+        assert sb.exec(["/opt/tools/tool"], timeout_s=30).stdout.strip() == "changed"
 
 
 @pytest.mark.docker
@@ -169,7 +169,65 @@ def test_task_factory_engine_runs_in_task_image(docker_factory, py_spec, py_env_
     if not all(src.is_file() for src in files.values()):
         pytest.skip("Task Factory engine is not built")
     base = docker_factory.build_image(py_spec, py_env_docker)
-    image = docker_factory.build_derived_image(base, agent.name, agent.install, files)
-    with docker_factory.new_sandbox(image) as sb:
+    # no derived image: the engine is mounted read-only from a volume filled once
+    assert docker_factory.build_derived_image(base, agent.name, agent.install) == base
+    with docker_factory.new_sandbox(base, files=files) as sb:
         res = sb.exec([ENGINE_IN_IMAGE, "--version"], timeout_s=60)
+        denied = sb.exec(["sh", "-c", f"echo x > {ENGINE_IN_IMAGE}"], timeout_s=10)
     assert res.exit_code == 0 and res.stdout.strip().startswith("task-factory ")
+    assert denied.exit_code != 0  # read-only: an agent cannot replace its own engine
+
+
+# --------------------------------------------------------------------------- allowlisted egress
+
+_PROBE = r"""
+import os, socket, sys
+host, port = os.environ["HTTPS_PROXY"].rsplit("/", 1)[1].split(":")
+def connect(target):
+    s = socket.create_connection((host, int(port)), timeout=10)
+    s.sendall(f"CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n".encode())
+    return s.recv(200).decode(errors="replace").split("\r\n")[0]
+print("github", connect("api.github.com:443"))
+print("pypi", connect("pypi.org:443"))
+try:
+    socket.create_connection(("1.1.1.1", 443), timeout=5)
+    print("direct open")
+except OSError as exc:
+    print("direct blocked", type(exc).__name__)
+"""
+
+
+@pytest.mark.docker
+def test_agent_sandbox_reaches_only_allowed_hosts(docker_factory):
+    """An agent sandbox gets a proxy that refuses every host but the allowlist, and no route around it."""
+    from factory.models import ImageRef
+
+    image = "python:3.13-slim"
+    if docker_factory._run(["image", "inspect", image]).returncode != 0 and \
+            docker_factory._run(["pull", "-q", image]).returncode != 0:
+        pytest.skip(f"{image} is not available")
+    since, before = time.time(), set(docker_factory._proxies)
+    try:
+        with docker_factory.new_sandbox(ImageRef(tag=image, backend="docker"), network=True,
+                                        allow_hosts=["opencode.ai", "*.opencode.ai"], egress_image=image) as sb:
+            sb.write_file("/tmp/probe.py", _PROBE)
+            out = sb.exec(["python", "/tmp/probe.py"], timeout_s=60).stdout
+        assert "github HTTP/1.1 403" in out and "pypi HTTP/1.1 403" in out, out
+        assert "direct blocked" in out, out  # internal network: nothing gets out without the proxy
+        blocked = docker_factory.egress_blocked(since - 1)
+        assert "api.github.com:443" in blocked and "pypi.org:443" in blocked
+    finally:
+        for name in docker_factory._proxies - before:  # this test's proxy only, not the harness's
+            docker_factory._run(["rm", "-f", name])
+            docker_factory._proxies.discard(name)
+
+
+def test_egress_allowlist_patterns():
+    from factory.harness.egress_proxy import allowed
+
+    patterns = ["opencode.ai", "*.opencode.ai", "bedrock-runtime.*.amazonaws.com"]
+    assert allowed("models.opencode.ai", "443", patterns) and allowed("OpenCode.AI.", "443", patterns)
+    assert allowed("bedrock-runtime.us-east-1.amazonaws.com", "443", patterns)
+    for host, port in [("api.github.com", "443"), ("evilopencode.ai", "443"), ("opencode.ai", "80"),
+                       ("s3.amazonaws.com", "443")]:
+        assert not allowed(host, port, patterns), host

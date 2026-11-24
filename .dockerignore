@@ -1,0 +1,9 @@
+.git
+.venv
+workdir
+submission
+.pytest_cache
+.ruff_cache
+**/__pycache__
+examples
+tests

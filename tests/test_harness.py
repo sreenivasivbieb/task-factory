@@ -48,7 +48,7 @@ def _patch_file(py_spec, tmp_path, overlay: dict[str, str]) -> Path:
 
 
 def is_test_path(path):
-    return bool(re.search(registry().test_re(), path))
+    return bool(re.search("|".join(registry()._all("test_paths")), path))
 
 
 def test_is_test_path():
@@ -157,3 +157,15 @@ def test_harbor_task_runs_like_harbor(docker_package, tmp_path, mode, reward):
 def test_agent_error_category(local_factory, package, tmp_path):
     summary, _ = _run(local_factory, package, tmp_path, get_agent("command", cmd="echo 'model not found' >&2; exit 1"))
     assert summary.categories == {"agent_error": 1}
+
+
+def test_agents_run_without_web_tools():
+    """The agent sandbox has the internet (for the model): web tools would let an agent fetch a public fix."""
+    import json
+
+    from factory.harness.agents import get_agent
+
+    engine = get_agent("task-factory")
+    rules = json.loads(engine.env["OPENCODE_CONFIG_CONTENT"])["permissions"]
+    assert {(r["action"], r["effect"]) for r in rules} == {("webfetch", "deny"), ("websearch", "deny")}
+    assert "--disallowedTools WebFetch,WebSearch" in get_agent("claude-code").run

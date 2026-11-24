@@ -6,7 +6,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
-`Python 3.11+` · `Docker` · `185 tests` · `Harbor-compatible`
+`Python 3.11+` · `Docker` · `197 tests` · `Harbor-compatible`
 
 </div>
 
@@ -102,6 +102,8 @@ then, inside any git project:
 | `/run-task` | Pick tasks (or "all approved"), pick a model (the selected one is first), and watch it solve them in Docker, live. Passing solutions become git branches. |
 | `/results` | Runs → attempts → one page with the verdict, hidden-test counts, the **agent's whole session** (what it said, every tool call and its output, tokens), the graded diff and the test output. |
 | `/benchmark` | Tasks × models: who solved what, the design doc's difficulty tag (solved by all attempts, some or none; "none ⚠" means check it is solvable), resolve rate, average time and tokens per model, and why attempts failed. `o` opens any attempt. |
+| `/solutions` | **This session's** AI solutions only: pick an attempt and see what the model changed as **files changed** (each file with `+`/`−` counts and its colored hunks). The default is the graded change (test and config edits undone); `r` switches to the raw agent change, so a model that edited the tests is easy to spot. |
+| `/rerun` | Run this session's tasks (made, run or copied in it) on **another model**, either in this session or in a **copy of the session**: a new session that starts with the same tasks, whose `/solutions` and sidebar show only the new model's attempts. |
 
 The engine's own commands that have nothing to do with tasks (`/pair`, `/stats`,
 `/usage`, `/update`, `/init`, `/review`, `/goal`, `/mcps`, `/plugins`, `/skills`,
@@ -149,6 +151,98 @@ a security fix against price and receipt tampering (27) and a scalability fix wi
 a load test (4). All pass the strict gates (3 repeats, every mutant caught), and
 free models solved them in Docker after one clarification that a failing model
 exposed.
+
+## SWE-bench style tasks from any GitHub repository
+
+A second way to make tasks, next to the gated pipeline: give a GitHub link and the
+miner (`swe/`, TypeScript, Node 22.18+, no packages to install) turns the
+repository's own history into tasks, the way SWE-bench does. Nothing in the gated
+pipeline changes; the packages have the same layout, so review, the coding harness,
+`/solutions` and Harbor export work on them as they are.
+
+```mermaid
+flowchart LR
+    U[("GitHub URL")] --> M["1 · Mine<br/>merged PRs that close an issue<br/>and change tests + code"]
+    M --> S["2 · Split at the exact base commit<br/>code → reference patch<br/>tests → hidden tests"]
+    S --> E["3 · Environment<br/>Docker at that commit,<br/>packages as of the PR's date"]
+    E -- "tests cannot run" --> A(["setup agent<br/>(selected model)"])
+    A -.-> E
+    E --> X["4 · Before / after runs<br/>offline sandbox"]
+    X --> P["5 · Package<br/>FAIL_TO_PASS · PASS_TO_PASS<br/>+ swe-bench.jsonl"]
+    P --> R{"Human review<br/>(pending)"} --> H["Coding harness"]
+```
+
+| Step | What happens |
+| --- | --- |
+| Mine | `gh api graphql` (your `gh` login): newest merged PRs first; a candidate closes at least one issue and changes both test files and other files |
+| Split | base = merge-base of the PR head (`refs/pull/N/head`) and its base branch; files on test paths become the hidden tests, the rest the reference patch; the issue text is the problem statement (template comments removed) |
+| Environment | `python:<the version current at the PR's date>-slim`, the project installed with its test extra using `uv pip install --exclude-newer <merge date>`, so dependencies are the ones that existed then; same Dockerfile and image tag as the Python side, so the harness reuses the image |
+| Setup agent | only from the terminal, only when the plain setup cannot run the tests: the selected model (in a session with every tool denied) reads the build files and the error and proposes setup commands; they run inside the container build |
+| Extract | one run of the PR's test files before the code change, two after it (a test that differs is flaky and left out), plus the whole suite once after it (the harness grades PASS_TO_PASS there) |
+| Package | the usual package (`instruction.md` = the issue, `solution/solution.diff`, hidden `tests/`, `environment/` with `repo.tar` of the base commit) + `swe.json`; all rows also in `swe-bench.jsonl` (SWE-bench fields) |
+
+No gates G0 to G6 run here: SWE tasks are as strong as the project's own tests.
+Each PR's outcome, with the reason when it is dropped, is kept in `prs/<n>.json`,
+and a rerun continues where it stopped (`--retry` tries dropped PRs again).
+
+```sh
+node swe/cli.ts mine https://github.com/python-humanize/humanize --max 5
+node swe/cli.ts funnel https://github.com/python-humanize/humanize
+factory tasks list --workdir ~/.local/state/task-factory/swe/python-humanize-humanize
+factory harness run --agent oracle --workdir ~/.local/state/task-factory/swe/python-humanize-humanize \
+  --tasks ~/.local/state/task-factory/swe/python-humanize-humanize/tasks      # must resolve every task
+```
+
+In the terminal: `/swe https://github.com/OWNER/REPO [how many]` shows the steps
+and the funnel live; `/swe-tasks` lists the tasks (problem statement, reference
+patch, hidden tests 🔒, FAIL_TO_PASS) with `x` run with a model, `a` approve,
+`d` delete. Runs started from a session show in that session's `/solutions`.
+
+On `pallets/click`: 52 PRs scanned, 8 candidates, **8 tasks**; the oracle resolves
+8/8 and an empty patch 0/8. A free model "resolved" 5 of the first 7, but in 3 it looked
+the fix up on the web (see Limitations in [decisions.md](docs/decisions.md)): `/solutions`
+marks such attempts. On `python-humanize/humanize`: 56 PRs scanned, 3 candidates, 2 tasks (one PR
+needs compiled translations, so its tests do not pass after its own change and it
+was dropped); the oracle resolves both, an empty patch none, and a free model
+solved one from the terminal. Python repositories only for now.
+
+## Records in MongoDB, and the whole pipeline in containers
+
+Task packages are files (their layout is the deliverable). Every **record** the
+factory keeps (review decisions, generations, harness attempts and runs,
+rejections, terminal session links, the SWE miner's outcomes, an index of tasks)
+is also written to MongoDB when `TASK_FACTORY_MONGO_URI` is set: one queryable
+store for a team, across projects. Files stay what the pipeline reads, so it runs
+the same without MongoDB; a failed write warns once, and `factory db sync` fills
+any gap (idempotent: every record has a fixed `_id`).
+
+```sh
+docker compose up -d mongo                       # MongoDB 8 on 127.0.0.1:27017 (volume task-factory_mongo-data)
+export TASK_FACTORY_MONGO_URI=mongodb://127.0.0.1:27017/task_factory
+factory db sync                                  # every work folder and SWE store on this machine
+factory db status                                # documents per collection
+```
+
+The factory itself runs in a container too (`Dockerfile`: Python, Node, git, gh,
+Docker CLI). Sandboxes stay siblings on the host's Docker (through its socket),
+so images, the engine volume and the egress proxy are shared:
+
+```sh
+scripts/factory-docker factory tasks list --workdir ~/.local/state/task-factory/swe/pallets-click
+scripts/factory-docker swe mine https://github.com/pallets/click --max 5
+```
+
+The wrapper runs as you (files in mounted folders stay yours), passes your
+`gh auth token`, and mounts the work folders and the engine read-only.
+
+**Speed and disk.** The engine is mounted read-only from one Docker volume
+(233 MB, once) instead of being copied into an agent image per task image
+(~780 MB each); `factory images prune [--all] [--dry-run]` removes agent images
+and unused engine volumes. Attempts and SWE candidates can run in parallel, opt
+in: `factory harness run --workers 3`, `node swe/cli.ts mine … --workers 2`
+(default 1: free models hit quota limits sooner, and each sandbox takes 2 CPUs and
+2 GB). Measured on click: oracle on 8 tasks with 3 workers in 31 s; two model
+attempts side by side in ~4 min instead of ~8.
 
 ## What makes a task "valid"
 
@@ -411,14 +505,21 @@ Agent: task-factory · Model: <model> · Attempt 1
 Hidden tests: 3/3 fail_to_pass passed, 28/28 pass_to_pass passed
 ```
 
+The agent's sandbox can reach **only the model's API**: it sits on an internal
+Docker network whose only way out is a small HTTPS proxy that allows the hosts in
+`[harness] allowed_hosts` (Zen, NVIDIA, TokenRouter, OpenRouter, Anthropic,
+OpenAI, Groq, Bedrock by default), and the agents' web tools are off. Without
+this a model looked up the public fix of a GitHub task. Every attempt records
+the hosts it was refused; `[harness] egress = "open"` turns the limit off.
+
 If the model edits an existing test file, the harness puts that file back
 before grading, records it under `tests_tampered`, and commits only the source
 change to the branch.
 
 ### Which models
 
-The default agent, `task-factory`, is the Task Factory engine itself, copied
-into the sandbox image (no download inside the container). It talks to many
+The default agent, `task-factory`, is the Task Factory engine itself, mounted
+read-only into the sandbox from a Docker volume (no download inside the container). It talks to many
 providers. Pass the model as `provider/model`:
 
 | Provider | Example `--model` | Credentials |

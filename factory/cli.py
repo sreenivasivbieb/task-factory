@@ -178,11 +178,27 @@ def build_parser() -> argparse.ArgumentParser:
     _harness_run_args(p)
     p = hsub.add_parser("work", help="run every open assignment, record results, branch passing solutions")
     p.add_argument("--k", type=int, default=None, help="attempts per task (default: harness.k = 1)")
+    p.add_argument("--workers", type=int, default=None, help="attempts at the same time (default: harness.workers = 1)")
     p.add_argument("--timeout", type=int, default=None, help="agent timeout in seconds")
     p.add_argument("--use-host-auth", action="store_true",
                    help="copy your stored agent login (that provider only) into the sandbox")
     p.add_argument("--no-branch", action="store_true", help="do not create git branches for passing solutions")
     _store(p)
+    _common(p)
+
+    # ---------------------------------------------------------------- records + images
+    db = sub.add_parser("db", help="records in MongoDB (TASK_FACTORY_MONGO_URI): sync from files, status")
+    dsub = db.add_subparsers(dest="action", required=True, metavar="ACTION")
+    p = dsub.add_parser("sync", help="write every record of the work folders to MongoDB (idempotent)")
+    p.add_argument("--path", type=Path, action="append", default=[],
+                   help="a work folder or SWE store (repeatable; default: every one this machine knows)")
+    _common(p)
+    p = dsub.add_parser("status", help="documents per collection")
+    _common(p)
+    images = sub.add_parser("images", help="the factory's Docker images")
+    isub = images.add_subparsers(dest="action", required=True, metavar="ACTION")
+    p = isub.add_parser("prune", help="remove agent images (rebuilt on demand); --all also task images")
+    p.add_argument("--all", action="store_true", help="also every factory-* task image (rebuilt from packages)")
     _common(p)
 
     p = sub.add_parser("bench", help="alias of 'harness run'")
@@ -196,6 +212,7 @@ def _harness_run_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--solver", dest="agent", help=argparse.SUPPRESS)
     p.add_argument("--model", default=None)
     p.add_argument("--k", type=int, default=None, help="attempts per task (default: harness.k = 1)")
+    p.add_argument("--workers", type=int, default=None, help="attempts at the same time (default: harness.workers = 1)")
     p.add_argument("--cmd", default=None, help="shell command for --agent command; use {instruction_file}")
     p.add_argument("--tasks", type=Path, default=None, help="a package or folder of packages (default: store)")
     p.add_argument("--task", action="append", default=[], help="only this task ID (repeatable)")

@@ -146,4 +146,8 @@ def write_package(draft: TaskDraft, report: ValidationReport, spec: RepoSpec, en
         shutil.rmtree(tmp, ignore_errors=True)
         raise
     log.info("wrote package %s", final)
+    from ..records import records, task_doc
+
+    if records.enabled:
+        records.put("tasks", task_doc(final, "pending"))
     return final

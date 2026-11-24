@@ -143,12 +143,13 @@ flowchart LR
         VA["validation/<br/>gates · mutations · drafts"]
         PK["packaging/<br/>writer · verify · harbor · toml_writer"]
         RV["review/<br/>store · render · interactive · authoring"]
-        HN["harness/<br/>agents · runner · protect"]
+        HN["harness/<br/>agents · runner · protect · egress_proxy"]
+        GE["generation/ · model_client.py"]
+        RC["records.py<br/>MongoDB dual write"]
+        SW["swe/ (TypeScript)<br/>SWE-bench style miner"]
     end
 
-    subgraph planned["Planned (M6–M10)"]
-        LLM["llm/"]
-        GE["generation/"]
+    subgraph planned["Planned (M7–M10)"]
         FE["features/"]
         VR["variation/"]
         RE["report/"]
@@ -160,18 +161,18 @@ flowchart LR
     PK --> VA
     RV --> VA & PK
     HN --> SB & RN & PK
-    GE --> LLM & VA
-    FE --> LLM
+    GE --> VA
+    FE --> GE
 
     classDef plan fill:#f1f5f9,stroke:#94a3b8,color:#334155,stroke-dasharray: 4 3;
-    class LLM,GE,FE,VR,RE plan;
+    class FE,VR,RE plan;
 ```
 
 Rules the code follows:
 
 - `cli.py` holds no business logic. Each command calls exactly one component.
 - Components never pass raw dicts to each other; they pass the pydantic models from `models.py`.
-- No provider-specific LLM code outside `llm/`.
+- No provider-specific LLM code outside `model_client.py` (and the terminal engine).
 - Errors are typed (`BuildError`, `SandboxStartError`, `RepoLoadError`, `PackageError`, …).
   The CLI maps them to exit codes. There is no bare `except` and no silent retry.
 
@@ -1025,7 +1026,7 @@ missing; `uv run pytest -m "not docker"` runs the rest in seconds.
 | Use Podman instead of Docker | set `sandbox.docker_binary = "podman"` |
 | Tune strictness | `gates.mutations`, `gates.stability_repeats`, `gates.max_known_failure_ratio` in `factory.toml` |
 | Fix a detection mistake | override any `EnvConfig` field under `[env]` in `factory.toml` |
-| Plug in an LLM provider (M6) | implement the `LLMClient` interface in `llm/` |
+| Plug in an LLM provider | add it to `model_client.py`, or connect it in the terminal (`/connect`) |
 | Benchmark another coding agent | add `[harness.agents.NAME]` (install + run command) to `factory.toml`, or use `--agent command --cmd …` |
 | Run on Harbor's agents | `factory tasks publish --format harbor --out DIR`, then `harbor run -p DIR -a <agent>` |
 

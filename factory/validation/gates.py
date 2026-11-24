@@ -324,5 +324,10 @@ def append_rejection(path: Path, report: ValidationReport) -> None:
     entry = {"task_id": report.task_id, "reject_code": report.reject_code.value if report.reject_code else None,
              "reject_reason": report.reject_reason,
              "logs": [p for g in report.gates for p in g.exec_log_paths]}
+    line = json.dumps(entry)
     with path.open("a", encoding="utf-8") as fh:
-        fh.write(json.dumps(entry) + "\n")
+        fh.write(line + "\n")
+    from ..records import line_doc, records
+
+    if records.enabled:
+        records.put("rejections", line_doc(path.parent, line))

@@ -1,0 +1,12 @@
+#!/bin/sh
+# Run a factory command in the container (see docker-compose.yml), as you, with your GitHub login.
+#   scripts/factory-docker factory tasks list
+#   scripts/factory-docker swe mine https://github.com/pallets/click --max 5
+set -eu
+cd "$(dirname "$0")/.."
+export TF_UID="$(id -u)" TF_GID="$(id -g)"
+export DOCKER_GID="$(stat -c %g /var/run/docker.sock 2>/dev/null || stat -f %g /var/run/docker.sock)"
+export GH_TOKEN="${GH_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+export TF_WORK="${TF_WORK:-$PWD}"
+mkdir -p "$HOME/.local/state/task-factory" "$HOME/.local/share/task-factory"
+exec docker compose run --rm factory "$@"

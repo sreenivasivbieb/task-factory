@@ -224,8 +224,111 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   `run_repeated`. Fields stored in existing `task.toml` files (`repair_attempts`,
   `solver_results`) stay, or older packages would stop loading. Mutation names in
   `gates.mutations` are now checked (a typo used to switch a mutant off silently).
+- **D58 Session-scoped solutions, written in TypeScript** (user request 2026-11-24: "particular
+  session tasks implementation should be shown with in that session only", and "JS/TS zyada").
+  `/solutions` and `/rerun` live in the terminal plugin (`factory/terminal_plugin/solutions.ts`) and
+  read the workdir directly; no Python was added. The plugin links each harness run it starts to the
+  session in `<workdir>/session-runs.jsonl` (new run folders that appeared during the run and hold
+  only the chosen tasks, so a run from another terminal is not taken). A copied session gets its task
+  list in `session-tasks.jsonl`. Runs started from the CLI or from the home screen belong to no
+  session and show only in `/results`. Agent errors (quota, login) are shown apart, as elsewhere.
+  Tests: `tests/ts/*.test.ts` with Node's built-in runner (Node 22.18+ runs TypeScript directly),
+  called from pytest (`tests/test_ts.py`, skipped on older Node).
+- **D59 SWE-bench style miner in TypeScript, beside the gated pipeline** (user request 2026-11-24:
+  "github link do, AI solved PRs with issues extract kare, tests hide kare, exact base node par
+  sandbox", "isme koi gates nahi", "naya SWE pipeline poora TS", "abhi ka implementation mat
+  badlo"). `swe/` (Node 22.18+, built-ins only, run with `node swe/cli.ts`) writes the factory's
+  package layout, so the Python store, review, harness and Harbor export use SWE tasks unchanged.
+  Open questions answered with the recommended defaults (the user asked to implement without
+  answering them): one before run + two after runs (the minimum that yields FAIL_TO_PASS /
+  PASS_TO_PASS; not the gates), problem statement = the issue text as written (only HTML template
+  comments removed), tasks land as `pending`, a linked issue is required, the setup agent's model
+  call is made by the terminal (host side; no credential enters a container), images are not
+  layered (the harness is unchanged; the tag and Dockerfile are byte-identical to Python's, so the
+  harness reuses the miner's image), dependencies are time-travelled with
+  `uv --exclude-newer <merge date>`, Python version = the one current at the PR's date (or higher
+  if `requires-python` says so). `tests/test_swe_parity.py` checks Dockerfile, image tag, env.json,
+  task.toml and JUnit IDs against the Python originals.
+- **D60 PASS_TO_PASS is filtered by a full-suite run.** The harness grades PASS_TO_PASS in the full
+  suite, not in the PR's test files (SWE-bench's way). On humanize an unrelated module that did not
+  import made every oracle attempt a "regression"; the miner now runs the whole suite once after the
+  change and keeps only PASS_TO_PASS tests that are green there (`not_green_in_full_suite` in
+  `validation/swe-runs.json`). An after-run with no passing test is an environment failure
+  (`env_failed`, and the setup agent is asked), not "no FAIL_TO_PASS".
+- **D61 Review round on the SWE miner** (2026-11-24, after a real run on pallets/click: 8/8 tasks,
+  oracle 8/8, empty patch 0/8). Fixed: a test file that contains U+FFFD was taken for binary (now a
+  strict UTF-8 decode of the raw bytes); hidden files that are not test modules (a mypy typing file,
+  data, helpers) were passed to pytest, which aborts the whole run, so the test command now passes
+  only `test_*.py` / `*_test.py` (the harness passes every hidden file; the filter lives in the
+  command); skipped tests were counted as failing; PEP 735 `[dependency-groups]` test groups are
+  installed; a run killed with exit 137 is reported as `oom` (`--memory`); `cp` replaced (Windows);
+  the package hardlinks the cached `repo.tar` and the cache is removed after a run; the sidebar no
+  longer reads every package. Dead code: `models.sha256_text`, an unused import in the plugin.
+  Quality flags per task (`swe.json` `quality`): hidden tests that call a new name the issue never
+  mentions, a too-short problem statement, a very large change.
+- **D62 Harness agents run without web tools** (user choice 2026-11-24, after the click leak). The
+  engine gets `OPENCODE_CONFIG_CONTENT` with deny rules for `webfetch` and `websearch` (the built
+  binary still reads the upstream name; checked by hand: with the rules, `run --auto` has no web
+  tool and says so; without them it fetched a page). Claude Code gets
+  `--disallowedTools WebFetch,WebSearch`. Network limits and the login proxy were not chosen yet.
+- **D63 Agent sandboxes reach only the model APIs** (user request 2026-11-24, "sahi API tak simit").
+  With web tools off, a model still ran `curl https://api.github.com/search/issues?...` from its
+  shell. Now the agent's container is on an internal Docker network (`factory-egress`, no route
+  out) and gets `HTTPS_PROXY` pointing at a small proxy container (`factory/harness/egress_proxy.py`,
+  standard library, non-root, read-only, 128 MB) that is the network's only way out and tunnels
+  HTTPS `CONNECT` to `harness.allowed_hosts` only (fnmatch patterns; defaults: Zen
+  `opencode.ai` + `*.opencode.ai`, found by routing the engine through the proxy, and the NVIDIA,
+  TokenRouter, OpenRouter, Anthropic, OpenAI, Groq and Bedrock APIs). Plain HTTP and other ports
+  are refused. Each attempt records the refused hosts (`egress_blocked` in `grade.json`,
+  `egress-blocked.txt`), shown in `/solutions`. The proxy is reused across runs (one per allowlist);
+  remove it with `docker rm -f $(docker ps -aq --filter label=factory-egress=1)`. Agents whose tools
+  need other hosts (e.g. LiteLLM's price list) may warn; add hosts in factory.toml.
+- **D64 Records in MongoDB by dual write** (user choices 2026-11-24: records in Mongo, packages stay
+  files; dual write). `factory/records.py`: with `TASK_FACTORY_MONGO_URI`, the review store,
+  `/generate-task` log, rejections, package writer and harness (attempts, runs) also upsert into
+  MongoDB (`tasks`, `review_events`, `generations`, `rejections`, `attempts`, `runs`, `session_runs`,
+  `session_tasks`, `swe_prs`, `swe_mining`). Fixed `_id`s, so a live write and `factory db sync`
+  never duplicate. The TypeScript side writes through `python -m factory.records sync <folder>` (no
+  npm driver). A failed write warns once and turns MongoDB off for the process; files are always
+  written. The user stopped Folio's MongoDB (`folio-mongo`, not removed) so ours uses 27017.
+- **D65 The pipeline in containers** (user request: "kahi bhi chale"). `docker-compose.yml`: `mongo`
+  (mongo:8.0, healthcheck, named volume) and `factory` (profile `cli`, image from `Dockerfile`).
+  Sandboxes are created on the host's Docker through its socket (user choice over Docker-in-Docker:
+  no privileged container, shared image cache). `scripts/factory-docker` runs as the host user with
+  the socket's group, passes `gh auth token`, mounts the state folder, the engine (read-only) and
+  the working repo. The terminal UI stays on the host.
+- **D66 Optimizations** (user choices). (1) Agent files (the engine) are mounted read-only from a
+  content-named volume (`factory-file-<digest>-<name>`, labelled for prune) instead of a derived image
+  per task image; the engine moved to `/opt/task-factory/` because the volume is mounted as the
+  file's folder. (2) `factory images prune`. (3) Parallel attempts (`harness.workers`, `--workers`)
+  with locks for the run's files, the solutions repo and image builds; the egress proxy logs the
+  client address so each attempt gets its own refused hosts. (4) Parallel SWE candidates
+  (`--workers`), git on the shared clone serialized. Both default to 1 (user: no extra risk by
+  default).
+- **D67 Dead code removed** (2026-11-24): the empty placeholder packages `factory/features`,
+  `factory/benchmark` and `factory/llm` (never imported; the model client is `model_client.py`, the
+  benchmark is the harness), `Registry.test_re` (only a test used it), and the file copying in
+  `build_derived_image` (agent files are mounted from volumes since D66; derived images now only run
+  install commands). Kept on purpose: framework hooks (`redirect_request`, `writable`, pydantic
+  validators) and `submission/` (a teammate's deliverable). Design doc module map updated.
 
 ## Limitations
+
+- **The agent sandbox has the internet** (it must reach the model), and the engine runs with every
+  tool allowed. On pallets/click the free model looked up the public fix in 3 of 7 attempts (web
+  search, GitHub issues, once `pull/3902.diff`). Such attempts are marked "used the internet" in
+  `/solutions` and after a run. Fixed by D62 (web tools off) and D63 (the sandbox reaches only the
+  model APIs). Left: an allowed model API could itself browse (e.g. a provider's server-side web
+  search); the provider login copied into the sandbox is readable by the repository's own code
+  there (proposed: a host-side proxy for model calls); `harness.egress = "open"` brings the old
+  behaviour back.
+
+- **SWE miner** (D59): Python repositories only; one Docker image per base commit (the Python
+  side's Dockerfile copies the repo before installing, so layers are not shared: several hundred MB
+  per task); public PRs may be in a model's training data (use `--since` for recent PRs only); no
+  mutation or regression gates, so a task is only as strong as the project's tests; PRs that delete
+  a test file or ship non-UTF-8 test files are dropped; the setup agent's commands run in the
+  container build with network on.
 
 - L1 LocalSandbox has no isolation and allows network; it logs a warning on every use.
 - L2 Python, Node (node:test) and Bash (defined only in factory.toml) run end to end on

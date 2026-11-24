@@ -403,8 +403,13 @@ def log_generation(wd: Workdir, entry: dict) -> None:
     import time
 
     wd.root.mkdir(parents=True, exist_ok=True)
+    line = json.dumps({"ts": round(time.time(), 3), **entry}, ensure_ascii=False)
     with _generations_file(wd).open("a", encoding="utf-8") as f:
-        f.write(json.dumps({"ts": round(time.time(), 3), **entry}, ensure_ascii=False) + "\n")
+        f.write(line + "\n")
+    from .records import generation_doc, records
+
+    if records.enabled:
+        records.put("generations", generation_doc(wd.root, line))
 
 
 def generations(root: Path, session_id: str | None = None) -> list[dict]:

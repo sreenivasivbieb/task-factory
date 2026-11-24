@@ -434,7 +434,7 @@ def cmd_harness_run(args, cfg) -> int:
     harness = _make_harness(args, cfg)
     try:
         summary = harness.run(packages, agent, model=args.model or cfg.harness.default_model,
-                              k=args.k or cfg.harness.k, on_result=on_result)
+                              k=args.k or cfg.harness.k, on_result=on_result, workers=args.workers)
     finally:
         harness.close()
     t = Table(header_style="bold", title=f"{agent.name} · resolved@{summary.k} {summary.resolved_at_k:.0%} · "
@@ -549,7 +549,8 @@ def cmd_harness_work(args, cfg) -> int:
                 results.append(r)
                 printer(r)
 
-            summary = harness.run([e.path for e in entries], agent, model=model, k=k, on_result=collect)
+            summary = harness.run([e.path for e in entries], agent, model=model, k=k, on_result=collect,
+                                  workers=getattr(args, "workers", None))
             who = f"{agent_name}{' ' + model if model else ''}"
             for e in entries:
                 rs = [r for r in results if r.task_id == e.task_id]
@@ -578,4 +579,61 @@ def cmd_harness_work(args, cfg) -> int:
         harness.close()
     console.print(f"done: {resolved_total} task(s) resolved; passing solutions are branches in "
                   f"{Workdir(cfg.workdir).root / 'solutions'}")
+    return 0
+
+
+# --------------------------------------------------------------------------- records + images
+
+
+def cmd_db_sync(args, cfg) -> int:
+    from .records import default_workdirs, records, sync_workdir
+
+    if not records.uri:
+        raise ConfigError("set TASK_FACTORY_MONGO_URI (e.g. mongodb://127.0.0.1:27017/task_factory; "
+                          "`docker compose up -d mongo` starts one)")
+    total: dict[str, int] = {}
+    for wd in args.path or default_workdirs():
+        for k, v in sync_workdir(wd).items():
+            total[k] = total.get(k, 0) + v
+        if not records.enabled:
+            raise ConfigError(f"MongoDB at {records.uri} is not reachable")
+        print(f"synced {wd}")
+    print("written:", ", ".join(f"{k} {v}" for k, v in sorted(total.items())) or "nothing")
+    return 0
+
+
+def cmd_db_status(args, cfg) -> int:
+    from .records import records
+
+    if not records.uri:
+        raise ConfigError("TASK_FACTORY_MONGO_URI is not set: records are in files only")
+    try:
+        counts = records.counts()
+    except Exception as exc:  # noqa: BLE001 - any driver error means "not reachable"
+        raise ConfigError(f"MongoDB at {records.uri} is not reachable: {str(exc).splitlines()[0][:200]}") from exc
+    for name, n in counts.items():
+        print(f"{name:15} {n}")
+    return 0
+
+
+def cmd_images_prune(args, cfg) -> int:
+    """Agent images (factory-<repo>-<agent>:...) are cheap to rebuild; task images are rebuilt from packages."""
+    import subprocess
+
+    docker = cfg.sandbox.docker_binary
+    out = subprocess.run([docker, "images", "--format", "{{.Repository}}:{{.Tag}} {{.Size}}"],
+                         capture_output=True, text=True, check=False).stdout.split("\n")
+    from .harness.agents import BUILTIN
+
+    agents = tuple(f"-{name}" for name in BUILTIN)
+    chosen = [ln.split(" ", 1) for ln in out if ln.startswith("factory-")
+              and (args.all or ln.split(":", 1)[0].endswith(agents))]
+    for tag, size in chosen:
+        print(f"{'would remove' if args.dry_run else 'remove'} {tag} ({size})")
+        if not args.dry_run:
+            subprocess.run([docker, "rmi", tag], capture_output=True, text=True, check=False)
+    if not args.dry_run:  # engine volumes no sandbox uses (an older engine build); refilled on demand
+        subprocess.run([docker, "volume", "prune", "-f", "-a", "--filter", "label=factory-file=1"],
+                       capture_output=True, text=True, check=False)
+    print(f"{len(chosen)} image(s){' (dry run)' if args.dry_run else ''}; `docker builder prune` frees the build cache")
     return 0

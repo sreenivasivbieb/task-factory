@@ -18,6 +18,7 @@ Add your own agent in ``factory.toml``::
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Literal
@@ -28,8 +29,16 @@ from ..errors import ConfigError
 
 _ENSURE_NODE = ("command -v npm >/dev/null 2>&1 || (apt-get update -qq && apt-get install -y -qq "
                 "--no-install-recommends nodejs npm ca-certificates && rm -rf /var/lib/apt/lists/*)")
-ENGINE_IN_IMAGE = "/usr/local/bin/task-factory-engine"
+# A folder of its own: the engine is mounted there read-only from a volume (not copied into images).
+ENGINE_IN_IMAGE = "/opt/task-factory/task-factory-engine"
 _ENGINE_ON_HOST = "{task_factory_engine}"  # resolved when the registry is built
+
+# The agent sandbox needs the network to reach the model, so an agent with web tools can look up a
+# public fix (on pallets/click a model fetched the PR's .diff). Harness runs turn those tools off.
+# The engine reads OPENCODE_CONFIG_CONTENT (not rebranded); a deny rule removes the tool, also with
+# --auto. Shell commands (curl, git clone) still reach the internet: see Limitations in decisions.md.
+WEB_TOOLS_OFF = json.dumps({"permissions": [{"action": tool, "resource": "*", "effect": "deny"}
+                                            for tool in ("webfetch", "websearch")]})
 
 
 def engine_on_host() -> str:
@@ -83,7 +92,8 @@ BUILTIN: dict[str, AgentSpec] = {
     "claude-code": AgentSpec(
         description="Anthropic's Claude Code CLI in headless mode (claude -p).",
         install=[_ENSURE_NODE, "npm install -g @anthropic-ai/claude-code"],
-        run='claude -p "$(cat {instruction_file})" --dangerously-skip-permissions --output-format json {model_args}',
+        run='claude -p "$(cat {instruction_file})" --dangerously-skip-permissions '
+            '--disallowedTools WebFetch,WebSearch --output-format json {model_args}',
         model_flag="--model {model}", secrets=["ANTHROPIC_API_KEY"], experimental=True),
     "codex": AgentSpec(
         description="OpenAI Codex CLI (codex exec).",
@@ -107,7 +117,7 @@ BUILTIN: dict[str, AgentSpec] = {
             f'{ENGINE_IN_IMAGE} run --auto --standalone --format json {{model_args}} "$(cat {{instruction_file}})"',
         model_flag="-m {model}",
         secrets=["NVIDIA_API_KEY", "TOKENROUTER_API_KEY", "TASK_FACTORY_API_KEY", "OPENROUTER_API_KEY", *_BEDROCK],
-        env={"OPENCODE_DISABLE_AUTOUPDATE": "1"}, secrets_optional=True,
+        env={"OPENCODE_DISABLE_AUTOUPDATE": "1", "OPENCODE_CONFIG_CONTENT": WEB_TOOLS_OFF}, secrets_optional=True,
         # Logins made in the terminal with /connect; copied only with --use-host-auth.
         host_auth_file="~/.local/share/task-factory/auth.json",
         sandbox_auth_file="/home/factory/.local/share/task-factory/auth.json",

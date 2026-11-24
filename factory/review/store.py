@@ -146,8 +146,17 @@ class TaskStore:
     def record(self, task_id: str, action: Action, reason: str | None = None, **extra) -> ReviewEvent:
         event = ReviewEvent(task_id=task_id, action=action, reviewer=self.reviewer, reason=reason, **extra)
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
+        line = event.model_dump_json()
         with self.log_path.open("a", encoding="utf-8") as fh:
-            fh.write(event.model_dump_json() + "\n")
+            fh.write(line + "\n")
+        from ..records import event_doc, records, workdir_key
+
+        if records.enabled:
+            records.put("review_events", event_doc(self.root, line))
+            status = {"add": "pending", "restore": "pending", "edit": "pending", "approve": "approved",
+                      "delete": "deleted"}.get(action)
+            if status:
+                records.set_fields("tasks", f"{workdir_key(self.root)}:{task_id}", {"status": status})
         return event
 
     # ------------------------------------------------------------------ queries

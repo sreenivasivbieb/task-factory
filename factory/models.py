@@ -6,7 +6,6 @@ Every component exchanges these models, never raw dicts. Each model carries
 
 from __future__ import annotations
 
-import hashlib
 import re
 from enum import Enum
 from pathlib import Path
@@ -325,10 +324,6 @@ def slugify(text: str, max_len: int = 32) -> str:
 def make_task_id(repo_name: str, commit_sha: str, title: str, n: int) -> str:
     """Task ID format ``<repo>-<short_sha>-<slug>-<nnn>`` (deterministic)."""
     return f"{slugify(repo_name, 24)}-{commit_sha[:7]}-{slugify(title)}-{n:03d}"
-
-
-def sha256_text(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 InspectResult.model_rebuild()

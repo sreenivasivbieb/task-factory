@@ -143,14 +143,21 @@ class SandboxFactory(abc.ABC):
         """Build (or reuse) the image for a pinned repo and environment."""
 
     @abc.abstractmethod
-    def new_sandbox(self, image: ImageRef, *, network: bool = False) -> Sandbox:
-        """Start a fresh sandbox from an image."""
+    def new_sandbox(self, image: ImageRef, *, network: bool = False, allow_hosts: list[str] | None = None,
+                    egress_image: str | None = None, files: dict[str, Path] | None = None) -> Sandbox:
+        """Start a fresh sandbox from an image. ``network`` with ``allow_hosts``: the sandbox reaches
+        only those hosts (HTTPS through an allowlist proxy run from ``egress_image``). ``files``
+        (path in the sandbox -> host file): mounted read-only, not copied into an image."""
+
+    def egress_blocked(self, since: float, sandbox: Sandbox | None = None) -> list[str]:
+        """Hosts the allowlist proxy refused since ``since`` (a Unix time), for ``sandbox`` only when
+        given (parallel attempts share the proxy); [] without a proxy."""
+        return []
 
     @abc.abstractmethod
-    def build_derived_image(self, base: ImageRef, name: str, commands: list[str],
-                            files: dict[str, Path] | None = None) -> ImageRef:
-        """Build an image on top of ``base`` that copies ``files`` (image path -> host file) and
-        runs ``commands`` as root (e.g. install an agent)."""
+    def build_derived_image(self, base: ImageRef, name: str, commands: list[str]) -> ImageRef:
+        """Build an image on top of ``base`` that runs ``commands`` as root (e.g. install an agent);
+        ``base`` itself when there are none. Agent files are mounted by ``new_sandbox``, not copied."""
 
     def pin_image(self, image: str) -> str:
         """``image`` pinned by digest (``name:tag@sha256:...``) where the backend can; else unchanged."""

@@ -152,9 +152,6 @@ class Registry(BaseModel):
             parts.append(r"(^|/)(" + "|".join(names) + r")$")
         return "|".join(parts) or r"^$"
 
-    def test_re(self) -> str:
-        return "|".join(self._all("test_paths")) or r"^$"
-
     def artifacts(self) -> list[str]:
         return self._all("artifacts")
 

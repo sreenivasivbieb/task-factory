@@ -1,0 +1,54 @@
+# The whole pipeline in containers: MongoDB for the records, and the factory itself
+# (Python CLI, the TypeScript SWE miner, git, gh, the Docker CLI).
+#
+#   docker compose up -d mongo                 # the records database (127.0.0.1:27017)
+#   scripts/factory-docker factory --help      # any factory command, inside the container
+#   scripts/factory-docker node swe/cli.ts mine https://github.com/pallets/click --max 5
+#
+# Sandboxes are siblings, not nested: the factory container talks to the host's Docker through
+# its socket, so images and the egress proxy are shared with runs started on the host.
+name: task-factory
+
+services:
+  mongo:
+    image: mongo:8.0
+    container_name: task-factory-mongo
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  factory:
+    build: .
+    image: task-factory:local
+    profiles: ["cli"]  # not a service: run it with `docker compose run --rm factory ...`
+    depends_on:
+      mongo:
+        condition: service_healthy
+    user: "${TF_UID:-1000}:${TF_GID:-1000}"
+    group_add:
+      - "${DOCKER_GID:-966}"  # the group that owns /var/run/docker.sock on the host
+    environment:
+      TASK_FACTORY_MONGO_URI: mongodb://mongo:27017/task_factory
+      TASK_FACTORY_PYTHON: python
+      GH_TOKEN: ${GH_TOKEN:-}  # the SWE miner's GitHub login (scripts/factory-docker passes `gh auth token`)
+      NVIDIA_API_KEY: ${NVIDIA_API_KEY:-}
+      TOKENROUTER_API_KEY: ${TOKENROUTER_API_KEY:-}
+      TASK_FACTORY_API_KEY: ${TASK_FACTORY_API_KEY:-}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.local/state/task-factory:/home/tf/.local/state/task-factory  # work folders, SWE stores
+      - ${HOME}/.local/share/task-factory:/home/tf/.local/share/task-factory:ro  # the engine + its logins
+      - ${TF_WORK:-.}:/work  # the repository you run the factory on
+    working_dir: /work
+
+volumes:
+  mongo-data:

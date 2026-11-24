@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+# Model provider APIs an agent may reach from its sandbox (harness.egress = "allowlist").
+# Zen: opencode.ai + models.opencode.ai (checked through the proxy); the others from the engine's
+# provider list. Add your own in factory.toml: [harness] allowed_hosts = [...].
+MODEL_API_HOSTS = (
+    "opencode.ai", "*.opencode.ai", "integrate.api.nvidia.com", "api.tokenrouter.com", "openrouter.ai",
+    "api.anthropic.com", "api.openai.com", "api.groq.com", "bedrock-runtime.*.amazonaws.com",
+)
 
 ALL_MUTATIONS = [
     "empty",
@@ -56,6 +64,13 @@ class HarnessConfig(_Section):
     use_host_auth: bool = False  # copy the agent's stored login file into the sandbox
     branches: bool = True  # commit every resolved attempt to a new git branch in workdir/solutions
     stop_after_agent_errors: int = 2  # an exhausted quota fails every task alike: stop the run early
+    workers: int = 1  # attempts at the same time; >1 is opt-in (more memory, more quota errors on free models)
+    # The agent's sandbox reaches the internet only through an HTTPS proxy that allows these hosts
+    # (fnmatch patterns): the model APIs. "open" gives it the whole internet (it can then look up a
+    # public fix). Grading and validation sandboxes never have a network.
+    egress: Literal["allowlist", "open"] = "allowlist"
+    allowed_hosts: list[str] = Field(default_factory=lambda: list(MODEL_API_HOSTS))
+    egress_image: str = "python:3.13-slim"  # runs the proxy (standard library only)
 
 
 class EnvOverrides(_Section):

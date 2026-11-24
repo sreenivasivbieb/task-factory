@@ -17,7 +17,9 @@ import json
 import logging
 import os
 import tempfile
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from pydantic import Field
@@ -26,6 +28,7 @@ from ..config import FactoryConfig
 from ..errors import ConfigError
 from ..models import EnvConfig, Model, RepoSpec, TaskPackage
 from ..packaging.verify import package_repo, read_package
+from ..records import attempt_doc, records, run_doc
 from ..runner.test_runner import run_tests
 from ..sandbox.base import BASE_TAG, SCRATCH_DIR, Sandbox, SandboxFactory
 from .agents import AgentSpec
@@ -64,6 +67,7 @@ class AttemptResult(Model):
     tokens: int | None = None
     branch: str | None = None  # new git branch holding the passing solution (resolved attempts only)
     commit: str | None = None
+    egress_blocked: list[str] = Field(default_factory=list)  # hosts the agent tried to reach, refused
 
 
 class TaskScore(Model):
@@ -134,6 +138,8 @@ class Harness:
         self.solutions = solutions  # SolutionRepos or None
         self._specs: dict[tuple[str, str], RepoSpec] = {}
         self._tmp = tempfile.TemporaryDirectory(prefix="factory-harness-")
+        self._image_locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
 
     def close(self) -> None:
         self._tmp.cleanup()
@@ -144,8 +150,12 @@ class Harness:
             self._specs[key] = package_repo(pkg, meta, Path(self._tmp.name) / str(len(self._specs)))
         return self._specs[key]
 
+    def _image_lock(self, key: str) -> threading.Lock:
+        with self._locks_guard:
+            return self._image_locks.setdefault(key, threading.Lock())
+
     def run(self, packages: list[Path], agent: AgentSpec, *, model: str | None = None, k: int = 1,
-            on_result=None) -> HarnessSummary:
+            on_result=None, workers: int | None = None) -> HarnessSummary:
         from ..sandbox.local_backend import LocalSandboxFactory
 
         from .agents import BUILTIN
@@ -164,52 +174,87 @@ class Harness:
         run_id = time.strftime("%Y%m%d-%H%M%S") + f"-{agent.name}"
         run_dir = self.out_dir / run_id
         results: list[AttemptResult] = []
-        consecutive_errors, stopped = 0, None
-        for pkg in packages:
-            if stopped:
-                break
-            meta, draft = read_package(pkg)
-            env = EnvConfig.load(Path(pkg) / "environment" / "env.json")
-            spec = self._spec(meta, Path(pkg))
-            base = self.factory.build_image(spec, env)
-            agent_image = self.factory.build_derived_image(base, agent.name, agent.install, files)
-            for attempt in range(1, k + 1):
-                adir = run_dir / meta.task_id / f"attempt-{attempt}"
-                adir.mkdir(parents=True, exist_ok=True)
-                res = self._attempt(meta, draft, env, base, agent_image, agent, model, attempt, adir, auth)
-                if res.resolved and self.solutions is not None and agent.kind == "command":
-                    clean = (adir / "solution.diff").read_text(encoding="utf-8")
-                    tar = Path(pkg) / "environment" / "repo.tar"
+        state: dict = {"errors": 0, "stopped": None}
+        lock = threading.Lock()  # results, the run's files, the stop rule
+        git_lock = threading.Lock()  # the solutions repo is one git working copy
+        prepared: dict[Path, tuple] = {}
+        pkg_locks = {Path(p): threading.Lock() for p in packages}
+
+        def prepare(pkg: Path):
+            """Task image (and agent image, when the agent installs something), once per package."""
+            with pkg_locks[pkg]:
+                if pkg not in prepared:
+                    meta, draft = read_package(pkg)
+                    env = EnvConfig.load(pkg / "environment" / "env.json")
+                    with lock:
+                        spec = self._spec(meta, pkg)
+                    with self._image_lock(spec.commit_sha):
+                        base = self.factory.build_image(spec, env)
+                        # files (the engine) are mounted read-only, never copied into an image
+                        agent_image = self.factory.build_derived_image(base, agent.name, agent.install)
+                    prepared[pkg] = (meta, draft, env, base, agent_image)
+            return prepared[pkg]
+
+        def one(pkg: Path, attempt: int) -> None:
+            if state["stopped"]:
+                return
+            meta, draft, env, base, agent_image = prepare(pkg)
+            adir = run_dir / meta.task_id / f"attempt-{attempt}"
+            adir.mkdir(parents=True, exist_ok=True)
+            res = self._attempt(meta, draft, env, base, agent_image, agent, model, attempt, adir, auth, files)
+            if res.resolved and self.solutions is not None and agent.kind == "command":
+                clean = (adir / "solution.diff").read_text(encoding="utf-8")
+                tar = pkg / "environment" / "repo.tar"
+                with git_lock:
                     res.branch, res.commit = self.solutions.record(
                         meta, clean, agent=agent.name, model=res.model, attempt=attempt, run_id=run_id,
                         f2p=f"{res.f2p_passed}/{res.f2p_total}",
                         p2p=f"{len(meta.pass_to_pass) - len(res.p2p_failed)}/{len(meta.pass_to_pass)}",
                         title=_title(draft.requirements_md, meta.task_id), archive=tar if tar.is_file() else None)
-                res.save(adir / "grade.json")
+            res.save(adir / "grade.json")
+            with lock:
                 with (run_dir / "results.jsonl").open("a", encoding="utf-8") as fh:
                     fh.write(res.model_dump_json() + "\n")
+                if records.enabled:
+                    records.put("attempts", attempt_doc(self.out_dir.parent, run_id, res.model_dump(mode="json")))
                 results.append(res)
                 if on_result:
                     on_result(res)
-                consecutive_errors = consecutive_errors + 1 if res.category == "agent_error" else 0
-                if consecutive_errors >= self.cfg.harness.stop_after_agent_errors:
-                    stopped = (f"{consecutive_errors} agent errors in a row (quota, API key or model ID?); "
-                               f"see {adir / 'agent.log.json'}")
-                    log.warning("stopping the run: %s", stopped)
-                    break
+                state["errors"] = state["errors"] + 1 if res.category == "agent_error" else 0
+                if state["errors"] >= self.cfg.harness.stop_after_agent_errors and not state["stopped"]:
+                    state["stopped"] = (f"{state['errors']} agent errors in a row (quota, API key or model ID?); "
+                                        f"see {adir / 'agent.log.json'}")
+                    log.warning("stopping the run: %s", state["stopped"])
+
+        jobs = [(Path(p), attempt) for p in packages for attempt in range(1, k + 1)]
+        workers = max(1, min(workers or self.cfg.harness.workers, len(jobs) or 1))
+        if workers == 1:
+            for job in jobs:
+                one(*job)
+        else:
+            log.info("running %d attempt(s) with %d workers", len(jobs), workers)
+            with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="attempt") as pool:
+                for future in [pool.submit(one, *job) for job in jobs]:
+                    future.result()  # re-raise the first error
         summary = summarize(run_id, agent.name, model, k, results)
-        summary.stopped_early = stopped
+        summary.stopped_early = state["stopped"]
         summary.save(run_dir / "summary.json")
+        if records.enabled:
+            records.put("runs", run_doc(self.out_dir.parent, run_id, summary.model_dump(mode="json")))
         return summary
 
     # ------------------------------------------------------------------ one attempt
 
     def _attempt(self, meta, draft, env: EnvConfig, base, agent_image, agent: AgentSpec, model, attempt,
-                 adir: Path, auth: bytes | None = None) -> AttemptResult:
+                 adir: Path, auth: bytes | None = None, files: dict[str, Path] | None = None) -> AttemptResult:
         res = AttemptResult(task_id=meta.task_id, agent=agent.name, model=model or agent.default_model,
                             attempt=attempt, resolved=False, category="no_change", f2p_total=len(meta.fail_to_pass))
         # ---- 1+2: agent works in its own sandbox; hidden files are never there
-        with self.factory.new_sandbox(agent_image, network=agent.network) as sb:
+        restrict = agent.network and self.cfg.harness.egress == "allowlist"
+        started_at = time.time()
+        with self.factory.new_sandbox(agent_image, network=agent.network,
+                                      allow_hosts=self.cfg.harness.allowed_hosts if restrict else None,
+                                      egress_image=self.cfg.harness.egress_image, files=files) as sb:
             leaked = self._leaks(sb, draft)
             if leaked:
                 res.category = "leak"
@@ -233,6 +278,10 @@ class Harness:
             res.agent_exit_code, res.agent_timed_out = out.exit_code, out.timed_out
             res.cost_usd, res.tokens = _usage(out.stdout)
             (adir / "agent.log.json").write_text(out.model_dump_json(indent=2), encoding="utf-8")
+            if restrict:  # what the agent tried to reach besides its model (e.g. GitHub for the fix)
+                res.egress_blocked = self.factory.egress_blocked(started_at - 1, sb)
+                if res.egress_blocked:
+                    (adir / "egress-blocked.txt").write_text("\n".join(res.egress_blocked) + "\n", encoding="utf-8")
             diff_cmd = f"git add -A && git diff --cached --binary {BASE_TAG} > {SCRATCH_DIR}/agent.diff"
             sb.exec(["sh", "-c", diff_cmd], timeout_s=120)
             try:
