@@ -1,0 +1,31 @@
+# Task Factory on pallets/click (Innodata AI Hackathon, Track 1).
+#
+#   uv run factory load    --repo https://github.com/pallets/click --commit cf19179e8e2fd54c601378cec9e0d21bb12b6fb1 --config examples/click/factory.toml
+#   uv run factory inspect --config examples/click/factory.toml
+#   uv run factory produce --config examples/click/factory.toml --count 5 \
+#       --model opencode/beam-free --model opencode/hy4-flash-free --harbor submission/harbor
+#
+# cf19179e8e2fd54c601378cec9e0d21bb12b6fb1 is the 8.5.1 release tag.
+seed = 0
+workdir = "workdir/click"
+
+[sandbox]
+backend = "docker"
+memory = "4g"
+cpus = 2.0
+pin_base_image = true
+
+[env]
+# click's pager tests (tests/test_utils/test_echo_via_pager.py) run `less`, which python:*-slim lacks.
+# With it installed, all 2434 tests pass at 8.5.1 (25 platform-specific tests skip).
+setup_commands = [
+  "apt-get update -qq && apt-get install -y -qq --no-install-recommends less && rm -rf /var/lib/apt/lists/*",
+  "pip install -q -e .",
+  "pip install -q pytest",
+]
+
+[gates]
+stability_repeats = 2
+mutations = ["empty", "revert_half", "flip_comparison", "drop_error_branch", "hardcode_expected"]
+# The hackathon requires a starting commit where every existing test passes: no known failures allowed.
+max_known_failure_ratio = 0.0
