@@ -56,6 +56,8 @@ class GatesConfig(_Section):
     # G7: every name the hidden tests import from the repo must exist before the change or be named in
     # the requirements, so a solver can know the API the tests call (anti-ambiguity).
     spec_check: bool = True
+    # G6 mutants run at the same time in this many sandboxes (speed only: the verdict is the same)
+    workers: int = 4
 
     @field_validator("mutations")
     @classmethod

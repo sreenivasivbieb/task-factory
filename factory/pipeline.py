@@ -25,6 +25,7 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
 import time
 import tomllib
 from pathlib import Path
@@ -67,6 +68,8 @@ class PipelineConfig(_Strict):
     backend: str | None = None  # docker (default) or local (dev only, no isolation)
     harbor: bool = True  # also publish in Harbor format
     sanity: bool = True  # oracle + noop on every published task
+    parallel_repos: bool = True  # build and validate the repositories at the same time (speed only)
+    harness_workers: int = 4  # oracle / noop attempts at the same time (speed only)
     benchmark: BenchmarkJob = Field(default_factory=BenchmarkJob)
     repos: list[RepoJob] = Field(default_factory=list)
 
@@ -81,11 +84,23 @@ class PipelineConfig(_Strict):
 # --------------------------------------------------------------------------- helpers
 
 
-def _factory(argv: list[str], ok: tuple[int, ...] = (0,)) -> int:
-    """Run one ``factory`` command in a subprocess, streaming its output."""
+_print_lock = threading.Lock()
+
+
+def _factory(argv: list[str], ok: tuple[int, ...] = (0,), prefix: str = "") -> int:
+    """Run one ``factory`` command in a subprocess, streaming its output (lines prefixed when parallel)."""
     cmd = [sys.executable, "-m", "factory", *argv]
-    print(f"\n$ factory {shlex.join(argv)}", flush=True)
-    code = subprocess.call(cmd)
+    with _print_lock:
+        print(f"\n{prefix}$ factory {shlex.join(argv)}", flush=True)
+    if not prefix:
+        code = subprocess.call(cmd)
+    else:
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                encoding="utf-8", errors="replace", env={**os.environ, "PYTHONUNBUFFERED": "1"})
+        for line in proc.stdout:
+            with _print_lock:
+                print(prefix + line, end="", flush=True)
+        code = proc.wait()
     if code not in ok:
         raise ConfigError(f"'factory {shlex.join(argv)}' failed with exit code {code}")
     return code
@@ -179,14 +194,19 @@ def run(pipeline_file: Path, *, only: list[str] | None = None, skip: list[str] |
     started = time.monotonic()
     report: dict = {"pipeline": str(pipeline_file), "steps": steps, "repos": {}}
 
-    for job in pc.repos:
+    # Repositories have separate work folders, so they are processed at the same time (speed only).
+    parallel = pc.parallel_repos and len(pc.repos) > 1
+
+    def repo_stage(job: RepoJob) -> None:
+        """Load, inspect, add drafts, produce, self-test: one repository in its own work folder."""
         wd = root / job.name
         common = _common(pc, wd, job.config)
+        tag = f"[{job.name}] " if parallel else ""
         info = report["repos"].setdefault(job.name, {"added": [], "rejected": [], "skipped": []})
         if "tasks" in steps or "selftest" in steps:
             _factory(["load", "--repo", job.source, *(["--commit", job.commit] if job.commit else []),
-                      *common, *(["--force"] if force else [])])
-            _factory(["inspect", *common, *(["--force"] if force else [])])
+                      *common, *(["--force"] if force else [])], prefix=tag)
+            _factory(["inspect", *common, *(["--force"] if force else [])], prefix=tag)
         if "tasks" in steps:
             state_path = wd / "pipeline_state.json"
             state = _state(state_path)
@@ -196,7 +216,7 @@ def run(pipeline_file: Path, *, only: list[str] | None = None, skip: list[str] |
                 if d.name in have or (not force and state["rejected"].get(key) == h):
                     info["skipped"].append(d.name)
                     continue
-                code = _factory(["tasks", "add", str(d), *common], ok=(0, 4))
+                code = _factory(["tasks", "add", str(d), *common], ok=(0, 4), prefix=tag)
                 if code == 0:
                     state["added"][key] = h
                     info["added"].append(d.name)
@@ -214,11 +234,21 @@ def run(pipeline_file: Path, *, only: list[str] | None = None, skip: list[str] |
                                if 'model = "human"' not in p.read_text(encoding="utf-8"))
                     if made < job.produce:
                         _factory(["produce", "--count", str(job.produce - made), "--approve",
-                                  *[a for m in models for a in ("--model", m)], *common], ok=(0, 4))
+                                  *[a for m in models for a in ("--model", m)], *common], ok=(0, 4), prefix=tag)
         if "selftest" in steps and job.selftest:
             out_file = wd / "selftest.json"
             if force or not out_file.exists():
-                _factory(["selftest", "--fixtures", job.selftest, "--out", str(out_file), *common])
+                _factory(["selftest", "--fixtures", job.selftest, "--out", str(out_file), *common], prefix=tag)
+
+    if parallel:
+        from concurrent.futures import ThreadPoolExecutor
+
+        with ThreadPoolExecutor(max_workers=len(pc.repos)) as pool:
+            for future in [pool.submit(repo_stage, job) for job in pc.repos]:
+                future.result()  # re-raise the first failure
+    else:
+        for job in pc.repos:
+            repo_stage(job)
 
     if "publish" in steps:
         for job in pc.repos:
@@ -234,7 +264,8 @@ def run(pipeline_file: Path, *, only: list[str] | None = None, skip: list[str] |
     tasks_dir = out / "tasks"
     if "sanity" in steps and pc.sanity and tasks_dir.exists():
         for agent in ("oracle", "noop"):
-            _factory(["harness", "run", "--agent", agent, "--tasks", str(tasks_dir), "--no-branch", *bench_common])
+            _factory(["harness", "run", "--agent", agent, "--tasks", str(tasks_dir), "--no-branch",
+                      "--workers", str(pc.harness_workers), *bench_common])
 
     if "benchmark" in steps and tasks_dir.exists():
         b = pc.benchmark

@@ -9,7 +9,7 @@ out = "workdir/dev-out"
 root = "workdir/dev-pipeline"
 config = "configs/factory.dev.toml"
 backend = "local"
-harbor = false
+harbor = true
 sanity = true
 
 [[pipeline.repos]]

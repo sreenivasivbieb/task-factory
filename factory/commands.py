@@ -472,7 +472,8 @@ def cmd_tasks_add(args, cfg) -> int:
     spec, env = load_state(cfg)
     store = _store_of(args, cfg)
     result = add_task(args.draft, spec, env, make_factory(cfg), cfg, store, author=args.author,
-                      approve=not args.pending, log_dir=Workdir(cfg.workdir).runs)
+                      approve=not args.pending, log_dir=Workdir(cfg.workdir).runs,
+                      cache_dir=Workdir(cfg.workdir).cache)  # G0 baseline: run once per environment
     _print_report(result.report)
     if result.package is None:
         print(f"NOT added: {result.report.reject_code.value}: {result.report.reject_reason}")

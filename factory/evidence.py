@@ -353,6 +353,7 @@ def build(tasks: list[Path], harness: list[Path], out: Path, *, rejections: list
         "oracle_resolved": sanity.get("oracle", {}).get("resolved_at_k"),
         "noop_resolved": sanity.get("noop", {}).get("resolved_at_k"),
         "selftest_pass": sum(1 for s in selftest if s.get("ok")), "selftest_total": len(selftest),
+        "selftest_bad": sum(1 for s in selftest if s.get("expected") != "valid"),
         "rejected_drafts": len(rejected),
         "models_benchmarked": len([b for b in board if not b["sanity"]]),
         "isolated_backend": all((r.backend or "docker") == "docker" for r in rows),
@@ -372,8 +373,10 @@ def _render(title, s, rows, board, models, matrix, fails, div, rejected, selftes
           f"noop {_pct(s['noop_resolved'])} (graded by the same harness the models use).",
           f"- **Tests catch wrong solutions, not only missing ones:** {s['mutants_total']} plausible-but-wrong mutants "
           f"run, mean mutation score {_pct(s['mean_mutation_score'])}.",
-          f"- **The gates reject broken tasks:** gate self-test {s['selftest_pass']}/{s['selftest_total']} known-bad "
-          f"tasks rejected with the expected code; {s['rejected_drafts']} draft(s) rejected during generation.",
+          f"- **The gates reject broken tasks:** gate self-test {s['selftest_pass']}/{s['selftest_total']} fixtures "
+          f"got the expected verdict ({s['selftest_bad']} known-bad drafts rejected with their exact reject code, "
+          f"{s['selftest_total'] - s['selftest_bad']} known-good accepted); "
+          f"{s['rejected_drafts']} draft(s) rejected during generation.",
           f"- **Benchmark:** {s['models_benchmarked']} model(s) under test, hidden tests, no internet except the model API.",
           ]
     if not s["isolated_backend"]:

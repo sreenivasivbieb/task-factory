@@ -223,21 +223,36 @@ class Validator:
             notes.append("no code mutant could be made from this patch, so only the empty control ran")
         need = self.cfg.min_mutation_score
         applicable = 1 + len(mutants)  # upper bound; mutants that do not apply are dropped from it
-        for m in mutants:
+
+        def run_mutant(m):
+            """None when the mutant does not apply, else its test run (each in its own fresh sandbox)."""
             with self._sandbox() as sb:
                 if not sb.apply_patch(m.patch).ok:
-                    notes.append(f"{m.name}: skipped (does not apply)")
-                    applicable -= 1
-                    continue
+                    return None
                 for path, content in draft.test_files.items():
                     sb.write_file(path, content)
-                s = run_tests(sb, self.env, sorted(draft.test_files),
-                              log_to=self._log(draft.task_id, f"G6-{m.name.replace('#', '-')}"))
+                return run_tests(sb, self.env, sorted(draft.test_files),
+                                 log_to=self._log(draft.task_id, f"G6-{m.name.replace('#', '-')}"))
+
+        # Mutants are independent, so they run at the same time (speed only); the verdict is decided
+        # below in mutant order, exactly as a one-by-one run would decide it.
+        workers = max(1, min(self.cfg.workers, len(mutants)))
+        if workers > 1:
+            from concurrent.futures import ThreadPoolExecutor
+
+            with ThreadPoolExecutor(max_workers=workers) as pool:
+                outcomes = list(pool.map(run_mutant, mutants))
+        else:
+            outcomes = [run_mutant(m) for m in mutants]
+        for m, s in zip(mutants, outcomes):
+            if s is None:
+                notes.append(f"{m.name}: skipped (does not apply)")
+                applicable -= 1
+                continue
             run += 1
             if self._passing(s, feature) == feature:
                 survivors.append(m.name)
                 notes.append(f"{m.name}: SURVIVED")
-                # stop as soon as the threshold can no longer be reached
                 if (applicable - len(survivors)) / applicable < need:
                     raise _Reject(RejectCode.NEG_CONTROL_PASSED,
                                   f"mutant {m.name} passes every feature test; the tests are too weak "

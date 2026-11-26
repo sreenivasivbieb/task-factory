@@ -12,6 +12,9 @@ uv run factory pipeline configs/hackathon.toml
 - The run is resumable: finished steps are skipped (`--force` redoes them). Pick steps with
   `--only` / `--skip`: `tasks`, `selftest`, `publish`, `sanity`, `benchmark`, `evidence`.
 - No Docker? A smoke run without isolation: `uv run factory pipeline configs/dev-local.toml --backend local`.
+- **Windows:** run everything inside WSL (Ubuntu). Never run `uv` for this folder from a Windows shell
+  (PowerShell, cmd, Git Bash): Windows `uv` replaces the Linux `.venv` and breaks any run in progress.
+  Use `wsl -d Ubuntu --cd /mnt/<drive>/<path>/task-factory -- ~/.local/bin/uv run factory …`.
 
 ## What one run does
 

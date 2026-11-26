@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 from pathlib import Path
 
@@ -33,6 +34,26 @@ class LocalSandboxFactory(SandboxFactory):
     def __init__(self, cache_dir: Path, cfg: SandboxConfig | None = None) -> None:
         self.cache_dir = Path(cache_dir) / "local-images"
         self.cfg = cfg or SandboxConfig()
+        self._mirrors: dict[str, Path] = {}
+        self._mirror_lock = threading.Lock()
+
+    def _mirror(self, location: str) -> Path:
+        """One copy of an image in the system temp folder, made on first use.
+
+        The work folder may sit on a slow filesystem (e.g. a Windows drive seen from WSL); every
+        sandbox is then copied from this local mirror instead. Same files, so the same results.
+        """
+        with self._mirror_lock:
+            mirror = self._mirrors.get(location)
+            if mirror is None or not mirror.exists():
+                mirror = Path(tempfile.mkdtemp(prefix="factory-img-")) / "repo"
+                shutil.copytree(location, mirror, symlinks=True)
+                self._mirrors[location] = mirror
+            return mirror
+
+    def __del__(self) -> None:
+        for mirror in getattr(self, "_mirrors", {}).values():
+            shutil.rmtree(mirror.parent, ignore_errors=True)
 
     def build_image(self, spec: RepoSpec, env: EnvConfig) -> ImageRef:
         log.warning(_WARNING)
@@ -81,7 +102,7 @@ class LocalSandboxFactory(SandboxFactory):
             raise SandboxRuntimeError("local image has no location")
         root = Path(tempfile.mkdtemp(prefix="factory-sb-"))
         repo = root / "repo"
-        shutil.copytree(image.location, repo, symlinks=True)
+        shutil.copytree(self._mirror(image.location), repo, symlinks=True)
         return LocalSandbox(root, repo, self.cfg.output_limit_bytes)
 
 
