@@ -182,6 +182,31 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("chat", help="launch the Task Factory terminal")
     sub.add_parser("terminal", help="use the bundled terminal engine’s native commands")
 
+    p = sub.add_parser("pipeline", help="end to end from one file: tasks -> gates -> self-test -> publish -> "
+                                        "oracle/noop -> benchmark -> REPORT.md")
+    p.add_argument("pipeline_file", type=Path, help="pipeline TOML, e.g. configs/hackathon.toml")
+    p.add_argument("--only", action="append", default=[], choices=["tasks", "selftest", "publish", "sanity",
+                                                                   "benchmark", "evidence"],
+                   help="run only this step (repeatable)")
+    p.add_argument("--skip", action="append", default=[], choices=["tasks", "selftest", "publish", "sanity",
+                                                                   "benchmark", "evidence"],
+                   help="skip this step (repeatable)")
+    _common(p)
+
+    p = sub.add_parser("evidence", help="REPORT.md + validation matrix, diversity and leaderboard from the logs")
+    p.add_argument("--tasks", type=Path, action="append", required=True, help="package folder(s) (repeatable)")
+    p.add_argument("--harness", type=Path, action="append", default=[],
+                   help="harness folder(s) or run folder(s) (default: <workdir>/harness)")
+    p.add_argument("--rejections", type=Path, action="append", default=[])
+    p.add_argument("--selftest", type=Path, action="append", default=[])
+    p.add_argument("--out", type=Path, required=True)
+    _common(p)
+
+    p = sub.add_parser("selftest", help="known-bad drafts must be rejected with the code their task.json expects")
+    p.add_argument("--fixtures", type=Path, required=True, help="folder of drafts with task.json \"expect\"")
+    p.add_argument("--out", type=Path, default=None, help="results JSON (default: <workdir>/selftest.json)")
+    _common(p)
+
     p = sub.add_parser("validate", help="run the gates on task drafts, or re-verify packages")
     p.add_argument("--tasks", type=Path, required=True,
                    help="a package folder, a folder of packages, or a draft folder")

@@ -1,0 +1,19 @@
+# Fast smoke run of the whole pipeline without Docker (local backend: NO isolation, dev only).
+#
+#   uv run factory pipeline configs/dev-local.toml --backend local
+#
+# Writes to workdir/dev-out (gitignored); the report flags that tasks were not validated in containers.
+
+[pipeline]
+out = "workdir/dev-out"
+root = "workdir/dev-pipeline"
+config = "configs/factory.dev.toml"
+backend = "local"
+harbor = false
+sanity = true
+
+[[pipeline.repos]]
+name = "toyshop"
+source = "tests/fixtures/toy_python_repo"
+drafts = ["examples/toyshop/*", "tests/fixtures/tasks/python/good_*"]
+selftest = "tests/fixtures/tasks/python"

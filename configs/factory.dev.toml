@@ -1,0 +1,13 @@
+# Dev gates: the full mutation set, one stability repeat (see factory.strict.toml for final runs).
+seed = 0
+
+[sandbox]
+backend = "local"
+
+[gates]
+stability_repeats = 1
+mutations = ["empty", "revert_half", "flip_comparison", "swap_arguments", "drop_error_branch",
+             "hardcode_expected", "off_by_one", "swap_arithmetic", "negate_condition", "swap_boolean"]
+min_mutation_score = 1.0
+spec_check = true
+max_known_failure_ratio = 0.0

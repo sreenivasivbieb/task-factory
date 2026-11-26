@@ -1,0 +1,26 @@
+# Strict gates for the final, submitted evidence (factory pipeline configs/hackathon.toml).
+seed = 0
+
+[sandbox]
+backend = "docker"
+memory = "2g"
+cpus = 2.0
+pin_base_image = true
+
+[gates]
+# every result must be identical on 3 repeats (G5)
+stability_repeats = 3
+# all ten mutation operators (G6): a task is kept only when its hidden tests catch every
+# plausible-but-wrong variant of the reference solution
+mutations = ["empty", "revert_half", "flip_comparison", "swap_arguments", "drop_error_branch",
+             "hardcode_expected", "off_by_one", "swap_arithmetic", "negate_condition", "swap_boolean"]
+min_mutation_score = 1.0
+# G7: the hidden tests may only call names that exist or that the requirements give
+spec_check = true
+# the starting commit must pass its whole test suite
+max_known_failure_ratio = 0.0
+
+[harness]
+k = 1
+workers = 1
+egress = "allowlist"   # the agent under test reaches only the model API

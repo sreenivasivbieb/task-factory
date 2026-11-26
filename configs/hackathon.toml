@@ -1,0 +1,43 @@
+# The whole Track 1 pipeline in one file:
+#
+#   uv run factory pipeline configs/hackathon.toml
+#
+# Generate -> Validate (gates G0-G7 + self-test) -> publish -> oracle/noop sanity -> benchmark -> REPORT.md
+# Results: submission/REPORT.md, submission/tasks/, submission/evidence/, submission/benchmark/
+# A rerun skips finished work; --force redoes it, --only/--skip pick steps.
+
+[pipeline]
+out = "submission"
+root = "workdir/pipeline"
+config = "configs/factory.strict.toml"
+harbor = true
+sanity = true
+
+# ---------------------------------------------------------------- repositories and task sources
+
+[[pipeline.repos]]
+name = "toyshop"                                   # Python: catalog, cart, pricing, money, receipts
+source = "tests/fixtures/toy_python_repo"
+drafts = ["examples/toyshop/*", "tests/fixtures/tasks/python/good_*"]
+selftest = "tests/fixtures/tasks/python"           # 1 good + 8 known-bad drafts, one per reject code
+# produce = 4                                      # more tasks written by models (needs API keys)
+# models = ["openrouter/qwen/qwen3-coder"]
+
+[[pipeline.repos]]
+name = "textkit"                                   # JavaScript (node:test): slugs, stats, templates, wrapping
+source = "tests/fixtures/toy_node_repo"
+drafts = ["examples/textkit/*", "tests/fixtures/tasks/node/good_*"]
+selftest = "tests/fixtures/tasks/node"
+
+# ---------------------------------------------------------------- AI under test
+# "agent:provider/model"; agents: task-factory (bundled engine), claude-code, codex, aider,
+# mini-swe-agent (factory harness agents). Each needs its provider's key in the environment.
+
+[pipeline.benchmark]
+k = 2
+timeout_s = 1800
+agents = [
+  # "claude-code:anthropic/claude-sonnet-4-5",
+  # "task-factory:openrouter/qwen/qwen3-coder",
+  # "task-factory:openrouter/moonshotai/kimi-k2",
+]

@@ -93,12 +93,30 @@ def _mask_strings(code: str) -> str:
     return _STRING_RE.sub(lambda m: m.group(0)[0] + " " * (len(m.group(0)) - 2) + m.group(0)[-1], code)
 
 
+_TRIPLE_RE = re.compile(r'"""|\'\'\'|`')
+
+
 def _added(files: list[FilePatch]):
-    """Yield (file_idx, hunk_idx, line_idx, code) for every added, non-comment line."""
+    """Yield (file_idx, hunk_idx, line_idx, code) for every added line that is code.
+
+    Comments are skipped, and so is every line of a multi-line string (docstrings, template
+    literals): a mutant there cannot change behaviour, so it would be an equivalent mutant.
+    """
     comment = _comment_re()
     for fi, f in enumerate(files):
         for hi, h in enumerate(f.hunks):
+            in_string = False
             for li, line in enumerate(h.lines):
+                if line.startswith("-"):
+                    continue  # not in the new file
+                # a line that opens or closes a multi-line string, or sits inside one; strings that
+                # open and close on the same line are masked by the operators themselves
+                quotes = len(_TRIPLE_RE.findall(line[1:]))
+                in_text = in_string or quotes % 2 == 1
+                if quotes % 2:
+                    in_string = not in_string
+                if in_text:
+                    continue
                 if line.startswith("+") and not line.startswith("+++") and not comment.match(line[1:]):
                     yield fi, hi, li, line[1:]
 
@@ -245,6 +263,78 @@ def revert_half(diff: str) -> list[str]:
         hunk.lines = original
 
 
+# --------------------------------------------------------------------------- semantic operators
+# Each targets one family of mistakes coding models make: boundaries off by one, an operator
+# mixed up, a condition inverted, a boolean connective swapped. Like the others they only touch
+# lines the patch adds, skip comments, strings and definition lines, and never change a test.
+
+_INT_RE = re.compile(r"(?<![\w.])(\d+)(?![\w.])")
+
+
+def _mutate_lines(diff: str, change, limit: int) -> list[str]:
+    """Apply ``change(code, file_name) -> new_code | None`` to added lines, one mutant per line."""
+    files = parse_patch(diff)
+    out = []
+    for fi, hi, li, code in _added(files):
+        if _def_re().match(code):
+            continue
+        new = change(code, _file_name(files[fi]))
+        if new is None or new == code:
+            continue
+        out.append(_with_line(files, fi, hi, li, new))
+        if len(out) >= limit:
+            break
+    return out
+
+
+def _sub_masked(code: str, rx: re.Pattern, repl) -> str | None:
+    """Replace the first match of ``rx`` outside string literals; ``repl(match) -> str``."""
+    m = rx.search(_mask_strings(code))
+    if not m:
+        return None
+    return code[: m.start()] + repl(m) + code[m.end():]
+
+
+def off_by_one(diff: str, limit: int = 2) -> list[str]:
+    """``qty >= 10`` -> ``qty >= 11``: a boundary or constant one off."""
+    return _mutate_lines(diff, lambda code, _: _sub_masked(code, _INT_RE, lambda m: str(int(m.group(1)) + 1)), limit)
+
+
+_ARITH = {"+": "-", "-": "+", "*": "/", "/": "*"}
+_ARITH_RE = re.compile(r"(?<=\s)([+\-*/])(=?)(?=\s)")
+
+
+def swap_arithmetic(diff: str, limit: int = 2) -> list[str]:
+    """``a - b`` -> ``a + b``, ``a * b`` -> ``a / b`` (binary operators only, ``**`` and ``//`` untouched)."""
+    return _mutate_lines(diff, lambda code, _: _sub_masked(
+        code, _ARITH_RE, lambda m: _ARITH[m.group(1)] + m.group(2)), limit)
+
+
+_PY_COND_RE = re.compile(r"^(\s*)(if|elif|while)\s+(.+?):(\s*(?:#.*)?)$")
+_C_COND_RE = re.compile(r"^(\s*(?:\}\s*else\s+)?)(if|while)\s*\((.+)\)(\s*\{?\s*)$")
+
+
+def negate_condition(diff: str, limit: int = 2) -> list[str]:
+    """``if x > y:`` -> ``if not (x > y):`` (Python) or ``if (!(x > y)) {`` (C-like languages)."""
+    def change(code: str, name: str) -> str | None:
+        if name.endswith(".py"):
+            m = _PY_COND_RE.match(code)
+            return f"{m.group(1)}{m.group(2)} not ({m.group(3)}):{m.group(4)}" if m else None
+        m = _C_COND_RE.match(code)
+        return f"{m.group(1)}{m.group(2)} (!({m.group(3)})){m.group(4)}" if m else None
+    return _mutate_lines(diff, change, limit)
+
+
+_BOOL = {" and ": " or ", " or ": " and ", "&&": "||", "||": "&&", "True": "False", "False": "True",
+         "true": "false", "false": "true"}
+_BOOL_RE = re.compile(r" and | or |&&|\|\||\b(?:True|False|true|false)\b")
+
+
+def swap_boolean(diff: str, limit: int = 2) -> list[str]:
+    """``a and b`` -> ``a or b``, ``True`` -> ``False`` (and the C-like equivalents)."""
+    return _mutate_lines(diff, lambda code, _: _sub_masked(code, _BOOL_RE, lambda m: _BOOL[m.group(0)]), limit)
+
+
 @dataclass
 class Mutant:
     name: str
@@ -259,6 +349,10 @@ def make_mutants(diff: str, test_files: dict[str, str], names: list[str]) -> lis
         "swap_arguments": lambda: swap_arguments(diff),
         "drop_error_branch": lambda: drop_error_branch(diff),
         "hardcode_expected": lambda: hardcode_expected(diff, test_files),
+        "off_by_one": lambda: off_by_one(diff),
+        "swap_arithmetic": lambda: swap_arithmetic(diff),
+        "negate_condition": lambda: negate_condition(diff),
+        "swap_boolean": lambda: swap_boolean(diff),
     }
     seen = {diff.strip()}
     mutants = []

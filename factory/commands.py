@@ -854,3 +854,42 @@ from .reference.commands import (  # noqa: E402,F401
     cmd_benchmark_enqueue, cmd_benchmark_kill, cmd_benchmark_status, cmd_benchmark_worker, cmd_proposals_approve,
     cmd_proposals_edit, cmd_proposals_list, cmd_proposals_reject, cmd_proposals_review, cmd_proposals_show, cmd_report,
     cmd_run)
+
+
+# =========================================================================== pipeline, evidence, self-test
+
+
+def cmd_pipeline(args, cfg) -> int:
+    from .pipeline import run
+
+    report = run(args.pipeline_file, only=args.only, skip=args.skip, force=args.force, backend=args.backend)
+    s = report.get("summary") or {}
+    if s and (s.get("selftest_pass") != s.get("selftest_total") or s.get("oracle_resolved") not in (None, 1.0)
+              or s.get("noop_resolved") not in (None, 0.0)):
+        print("WARNING: a sanity check failed (self-test, oracle or noop); see REPORT.md", file=sys.stderr)
+        return 1
+    return 0
+
+
+def cmd_evidence(args, cfg) -> int:
+    import json
+
+    from .evidence import build
+
+    wd = Workdir(cfg.workdir)
+    summary = build(args.tasks, args.harness or [wd.harness], args.out,
+                    rejections=args.rejections or [wd.rejections],
+                    selftests=args.selftest or [wd.root / "selftest.json"])
+    print(json.dumps(summary, indent=2))
+    print(f"report: {Path(args.out) / 'REPORT.md'}")
+    return 0 if summary["tasks"] else 4
+
+
+def cmd_selftest(args, cfg) -> int:
+    from .pipeline import run_selftest
+
+    out = args.out or Workdir(cfg.workdir).root / "selftest.json"
+    results = run_selftest(cfg, args.fixtures, out)
+    bad = [r for r in results if not r["ok"]]
+    print(f"{len(results) - len(bad)}/{len(results)} fixtures got the expected verdict -> {out}")
+    return 1 if bad or not results else 0

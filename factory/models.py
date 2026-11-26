@@ -251,6 +251,7 @@ class RejectCode(str, Enum):
     FLAKY = "FLAKY"
     NEG_CONTROL_PASSED = "NEG_CONTROL_PASSED"
     SOLUTION_TOUCHES_PROTECTED = "SOLUTION_TOUCHES_PROTECTED"
+    UNDERSPECIFIED = "UNDERSPECIFIED"  # G7: the tests call names the requirements never give
 
 
 class GateResult(Model):
@@ -274,6 +275,7 @@ class ValidationReport(Model):
     mutation_score: float | None = None
     mutants_run: int = 0
     mutants_caught: int = 0
+    surviving_mutants: list[str] = Field(default_factory=list)  # names of mutants the tests did not catch
     backend: str | None = None  # sandbox the gates ran in: "docker" (isolated) or "local" (no isolation)
 
 

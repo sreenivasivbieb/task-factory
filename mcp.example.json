@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "task-factory": {
+      "command": "uv",
+      "args": ["run", "--extra", "mcp", "factory-mcp"]
+    }
+  }
+}

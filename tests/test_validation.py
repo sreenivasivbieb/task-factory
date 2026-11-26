@@ -8,7 +8,9 @@ from factory.models import RejectCode
 from factory.validation.drafts import diff_from_overlay, load_draft_dir
 from factory.validation.gates import Validator, append_rejection
 from factory.validation.mutations import (drop_error_branch, flip_comparison, hardcode_expected, make_mutants,
-                                          revert_half, swap_arguments)
+                                          negate_condition, off_by_one, revert_half, swap_arguments,
+                                          swap_arithmetic, swap_boolean)
+from factory.validation.spec_check import spec_findings
 
 TASKS = Path(__file__).parent / "fixtures" / "tasks"
 PY_TASKS = sorted(p for p in (TASKS / "python").iterdir() if p.is_dir())
@@ -65,8 +67,98 @@ def test_make_mutants_dedupes():
     ms = make_mutants(PATCH, {"t.py": "assert f(1, 2) == 42"}, ALL_MUTATIONS)
     names = [m.name.split("#")[0] for m in ms]
     assert set(names) == {"revert_half", "flip_comparison", "swap_arguments", "drop_error_branch",
-                          "hardcode_expected"}
+                          "hardcode_expected", "off_by_one", "negate_condition"}
     assert len({m.patch for m in ms}) == len(ms)
+
+
+ARITH_PATCH = """diff --git a/p.py b/p.py
+--- a/p.py
++++ b/p.py
+@@ -1,1 +1,4 @@
+ def total(price, qty, vip):
++    amount = price * qty - 5
++    ok = vip and qty > 0
++    label = "a - b and c"
+"""
+
+JS_PATCH = """diff --git a/lib/x.js b/lib/x.js
+--- a/lib/x.js
++++ b/lib/x.js
+@@ -1,1 +1,3 @@
+ function f(a) {
++  if (a.length > 3 && a[0]) {
++    return true;
+"""
+
+
+def test_off_by_one_changes_one_integer():
+    (m,) = off_by_one(PATCH, limit=1)
+    assert "+    if a >= 11:" in m and '"a >= 10"' in m  # the string literal is untouched
+
+
+def test_swap_arithmetic_skips_strings():
+    ms = swap_arithmetic(ARITH_PATCH)
+    assert "+    amount = price / qty - 5" in ms[0]
+    assert all('"a - b and c"' in m for m in ms)
+
+
+def test_negate_condition_python_and_c_like():
+    (m,) = negate_condition(PATCH, limit=1)
+    assert "+    if not (a >= 10):" in m
+    (j,) = negate_condition(JS_PATCH, limit=1)
+    assert "+  if (!(a.length > 3 && a[0])) {" in j
+
+
+DOC_PATCH = '''diff --git a/a.py b/a.py
+--- a/a.py
++++ b/a.py
+@@ -1,1 +1,7 @@
+ import math
++def area(w, h):
++    """Area of a w * h box.
++
++    Charged as w * h, never w + h.
++    """
++    return w * h
+'''
+
+
+def test_mutants_skip_docstrings():
+    """A docstring mutant cannot change behaviour (an equivalent mutant would reject a good task)."""
+    (m,) = swap_arithmetic(DOC_PATCH)
+    assert "+    return w / h" in m and "+    Charged as w * h, never w + h." in m
+
+
+def test_swap_boolean():
+    (m,) = swap_boolean(ARITH_PATCH, limit=1)
+    assert "+    ok = vip or qty > 0" in m
+    (j,) = swap_boolean(JS_PATCH, limit=1)
+    assert "a.length > 3 || a[0]" in j
+
+
+# --------------------------------------------------------------------------- G7 spec coverage
+
+
+def test_spec_check_accepts_existing_and_named_names(py_spec):
+    tests = {"tests/test_x.py": "from toyshop.pricing import line_total, BULK_MIN_QTY\nimport pytest\n"}
+    assert spec_findings("Add `BULK_MIN_QTY = 10` to toyshop/pricing.py.", tests, py_spec) == []
+
+
+def test_spec_check_flags_unnamed_new_api(py_spec):
+    tests = {"tests/test_x.py": "from toyshop import pricing\nfrom toyshop.checkout import checkout\n"
+                                "def test_a():\n    pricing.bulk_rate(3)\n"}
+    found = {f.name for f in spec_findings("Make big carts cheaper.", tests, py_spec)}
+    assert found == {"bulk_rate", "checkout"}
+    named = "Add `toyshop.pricing.bulk_rate(qty)` and a new module `toyshop/checkout.py` with `checkout()`."
+    assert spec_findings(named, tests, py_spec) == []
+
+
+def test_spec_check_js(node_spec):
+    tests = {"test/x.test.js": "const { slugify, readingTime } = require('../lib/stats');\n"
+                               "import { render } from '../lib/template';\n"}
+    found = spec_findings("Estimate how long a text takes to read.", tests, node_spec)
+    assert [(f.name, f.source) for f in found] == [("slugify", "../lib/stats"), ("readingTime", "../lib/stats")]
+    assert spec_findings("Add `readingTime(text)` next to `slugify` in lib/stats.js.", tests, node_spec) == []
 
 
 # --------------------------------------------------------------------------- drafts
@@ -95,13 +187,13 @@ def test_python_task_gets_expected_verdict(task_dir, local_validator, py_spec):
     expect = _expect(task_dir)
     if expect == "valid":
         assert report.verdict == "valid", report.reject_reason
-        assert [g.gate for g in report.gates] == ["G0", "G1", "G2", "G3", "G4", "G6", "G5"]
+        assert [g.gate for g in report.gates] == ["G0", "G1", "G7", "G2", "G3", "G4", "G6", "G5"]
         assert report.fail_to_pass == ["tests/test_bulk_discount.py::test_bulk_discount_boundary",
                                        "tests/test_bulk_discount.py::test_bulk_discount_in_subtotal",
                                        "tests/test_bulk_discount.py::test_bulk_discount_rounds_half_up"]
         assert len(report.pass_to_pass) == 28
         assert report.mutation_score == 1.0 and report.mutants_run >= 3
-        assert all(g.exec_log_paths for g in report.gates if g.gate != "G1")
+        assert all(g.exec_log_paths for g in report.gates if g.gate not in ("G1", "G7"))  # G1, G7: static
     else:
         assert report.verdict == "rejected"
         assert report.reject_code == RejectCode(expect), report.reject_reason

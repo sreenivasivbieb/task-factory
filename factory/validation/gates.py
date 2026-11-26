@@ -1,8 +1,9 @@
 """Validation runner (section 10): prove a task is valid by running code.
 
-Gate order: G0 baseline, G1 patch applies, G2 feature passes, G3 feature fails
-without the feature, G4 regression, G6 negative controls, then G5 stability
-(G5 runs last because it is the most expensive). Every gate uses a fresh
+Gate order: G0 baseline, G1 patch applies, G7 spec coverage (static: the tests only
+call names the requirements give), G2 feature passes, G3 feature fails without the
+feature, G4 regression, G6 negative controls (mutants), then G5 stability (G5 runs
+last because it is the most expensive). Every gate uses a fresh
 sandbox from the same image. The first failing gate rejects the task. No model
 opinion is involved anywhere.
 """
@@ -198,17 +199,35 @@ class Validator:
                           f"feature tests fail when run with the full suite: {_names(feature_bad)}")
         return GateResult(gate="G4", passed=True, details=f"{len(base.passed)} existing tests still pass"), s
 
-    def _gate_g6(self, draft: TaskDraft, feature: set[str]) -> tuple[GateResult, int, int]:
+    def _gate_g7(self, draft: TaskDraft) -> GateResult:
+        """Spec coverage (static): the tests only call names the solver can know about."""
+        if not self.cfg.spec_check:
+            return GateResult(gate="G7", passed=True, details="skipped (gates.spec_check = false)")
+        from .spec_check import spec_findings
+
+        findings = spec_findings(draft.requirements_md, draft.test_files, self.spec)
+        if findings:
+            raise _Reject(RejectCode.UNDERSPECIFIED,
+                          "the hidden tests use names the requirements never give, so a correct solver could not "
+                          "know them: " + "; ".join(map(str, findings[:8]))
+                          + (f" (+{len(findings) - 8} more)" if len(findings) > 8 else ""))
+        return GateResult(gate="G7", passed=True,
+                          details="every repository name the tests import exists or is named in the requirements")
+
+    def _gate_g6(self, draft: TaskDraft, feature: set[str], survivors: list[str]) -> tuple[GateResult, int, int]:
         # The empty-patch control is exactly G3, which has already passed.
         run, caught = 1, 1
         notes = ["empty: caught (G3)"]
         mutants = make_mutants(draft.solution_patch, draft.test_files, self.cfg.mutations)
         if not mutants:
             notes.append("no code mutant could be made from this patch, so only the empty control ran")
+        need = self.cfg.min_mutation_score
+        applicable = 1 + len(mutants)  # upper bound; mutants that do not apply are dropped from it
         for m in mutants:
             with self._sandbox() as sb:
                 if not sb.apply_patch(m.patch).ok:
                     notes.append(f"{m.name}: skipped (does not apply)")
+                    applicable -= 1
                     continue
                 for path, content in draft.test_files.items():
                     sb.write_file(path, content)
@@ -216,9 +235,14 @@ class Validator:
                               log_to=self._log(draft.task_id, f"G6-{m.name.replace('#', '-')}"))
             run += 1
             if self._passing(s, feature) == feature:
-                raise _Reject(RejectCode.NEG_CONTROL_PASSED,
-                              f"mutant {m.name} passes every feature test; the tests are too weak "
-                              f"(caught {caught}/{run})")
+                survivors.append(m.name)
+                notes.append(f"{m.name}: SURVIVED")
+                # stop as soon as the threshold can no longer be reached
+                if (applicable - len(survivors)) / applicable < need:
+                    raise _Reject(RejectCode.NEG_CONTROL_PASSED,
+                                  f"mutant {m.name} passes every feature test; the tests are too weak "
+                                  f"(caught {caught}/{run}; survivors: {', '.join(survivors)})")
+                continue
             caught += 1
             notes.append(f"{m.name}: caught")
         return GateResult(gate="G6", passed=True, details="; ".join(notes)), run, caught
@@ -256,6 +280,8 @@ class Validator:
             report.known_failures = sorted(base.known_failures)
             current, t = "G1", time.monotonic()
             gates.append(_timed(self._gate_g1(draft), t))
+            current, t = "G7", time.monotonic()
+            gates.append(_timed(self._gate_g7(draft), t))
             current, t = "G2", time.monotonic()
             g, feature, g2_run = self._gate_g2(draft, base)
             gates.append(_timed(g, t))
@@ -265,7 +291,7 @@ class Validator:
             g, g4_run = self._gate_g4(draft, base, feature)
             gates.append(_timed(g, t))
             current, t = "G6", time.monotonic()
-            g, report.mutants_run, report.mutants_caught = self._gate_g6(draft, feature)
+            g, report.mutants_run, report.mutants_caught = self._gate_g6(draft, feature, report.surviving_mutants)
             gates.append(_timed(g, t))
             current, t = "G5", time.monotonic()
             g, _ = self._gate_g5(draft, g2_run, g4_run)

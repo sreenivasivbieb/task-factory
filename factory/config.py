@@ -23,6 +23,10 @@ ALL_MUTATIONS = [
     "swap_arguments",
     "drop_error_branch",
     "hardcode_expected",
+    "off_by_one",
+    "swap_arithmetic",
+    "negate_condition",
+    "swap_boolean",
 ]
 
 
@@ -46,6 +50,12 @@ class GatesConfig(_Section):
     stability_repeats: int = 1  # dev default; use 3 for final runs
     mutations: list[str] = Field(default_factory=lambda: ["empty", "flip_comparison", "drop_error_branch"])
     max_known_failure_ratio: float = 0.2
+    # G6 passes when at least this share of mutants (the empty patch included) is caught. 1.0 = every
+    # mutant; lower it only with a large operator set, where an equivalent mutant may be unavoidable.
+    min_mutation_score: float = 1.0
+    # G7: every name the hidden tests import from the repo must exist before the change or be named in
+    # the requirements, so a solver can know the API the tests call (anti-ambiguity).
+    spec_check: bool = True
 
     @field_validator("mutations")
     @classmethod

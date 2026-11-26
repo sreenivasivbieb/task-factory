@@ -1,0 +1,7 @@
+{
+  "title": "Buy one get one free on SKU B2",
+  "kind": "feature",
+  "tags": ["validation rule", "data transformation", "cross-feature interaction"],
+  "model": "openrouter/baidu/ernie-5.5-flash-preview:free",
+  "request": "Add a buy-one-get-one-free discount for toy SKU B2"
+}
