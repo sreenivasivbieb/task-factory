@@ -847,3 +847,10 @@ def cmd_images_prune(args, cfg) -> int:
                        capture_output=True, text=True, check=False)
     print(f"{len(chosen)} image(s){' (dry run)' if args.dry_run else ''}; `docker builder prune` frees the build cache")
     return 0
+
+
+# reference-guided pipeline (v2.2): factory run | proposals | benchmark | report
+from .reference.commands import (  # noqa: E402,F401
+    cmd_benchmark_enqueue, cmd_benchmark_kill, cmd_benchmark_status, cmd_benchmark_worker, cmd_proposals_approve,
+    cmd_proposals_edit, cmd_proposals_list, cmd_proposals_reject, cmd_proposals_review, cmd_proposals_show, cmd_report,
+    cmd_run)

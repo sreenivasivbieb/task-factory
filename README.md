@@ -5,9 +5,8 @@
 **Turn any software repository into validated coding tasks for evaluating AI coding agents.**
 
 [![Python](https://img.shields.io/badge/python-3.11%2B-3776AB)](pyproject.toml)
-[![Node](https://img.shields.io/badge/node-22.18%2B-339933)](swe/)
 [![Docker](https://img.shields.io/badge/runs%20in-Docker-2496ED)](docs/deployment.md)
-[![Tests](https://img.shields.io/badge/tests-197%20passing-brightgreen)](docs/getting-started.md#install)
+[![Tests](https://img.shields.io/badge/tests-269%20passing-brightgreen)](docs/getting-started.md#install)
 [![Harbor](https://img.shields.io/badge/export-Harbor-6f42c1)](docs/harness.md#harbor-export)
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
@@ -28,7 +27,8 @@ Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
 ## Features
 
-- **Two ways to create tasks, one package format**
+- **Three ways to create tasks, one package format**
+  - **Reference-guided pipeline (`factory run`):** research agents find features similar projects have, a critic checks each against the real code, and a panel of models builds the package.
   - **Gated pipeline:** a person or a model writes the task; seven gates prove it valid, including mutation testing.
   - **SWE miner:** turns merged GitHub pull requests that close an issue into SWE-bench style tasks at the exact base commit.
 - **Validity is proven, not claimed**
@@ -120,6 +120,7 @@ node swe/cli.ts mine https://github.com/pallets/click --max 5
 | Review tasks | `factory review` · `factory tasks approve|delete|restore ID` |
 | Publish approved tasks | `factory tasks publish --out DIR [--format harbor]` |
 | Run agents on tasks | `factory harness run --agent AGENT --model PROVIDER/MODEL` |
+| Research and build tasks from peer projects | `factory run --count N --once` |
 | Mine tasks from GitHub | `node swe/cli.ts mine URL --max N` |
 | Sync records to MongoDB | `factory db sync` |
 | Free disk space | `factory images prune [--all]` |
@@ -153,7 +154,8 @@ node swe/cli.ts mine https://github.com/pallets/click --max 5
 | SWE miner (Python repositories) | ✅ Done |
 | Egress allowlist, MongoDB records, containers | ✅ Done |
 | SWE miner for other languages | 🔜 Planned |
-| Automatic feature discovery, variation, report | 🔜 Planned (M7–M9) |
+| Reference-guided pipeline: research lanes, critic, multi-model builder (`factory run`) | 🧪 Working; no click package past every gate yet |
+| Variation across many repositories | 🔜 Planned |
 
 - Open issues and limitations: [docs/decisions.md](docs/decisions.md#limitations)
 

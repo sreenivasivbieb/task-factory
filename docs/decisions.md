@@ -1,3 +1,6 @@
+
+
+
 # Decisions, assumptions and limitations
 
 Recorded as the build goes (design doc section 20). Newest last within each section.
@@ -319,6 +322,74 @@ Recorded as the build goes (design doc section 20). Newest last within each sect
   which files the test command passes to pytest. Patterns with characters other than plain globs, or
   not ending in `.py`, fall back to the defaults, because they are written into a shell command. The
   repository is now cloned before mining.
+
+- **D69 Reference-guided pipeline (v2.2 change proposal) as `factory run`** (user request
+  2026-11-26, from `reference_guided_pipeline_delta_v2_2_final.pdf`; main pulled to 45d829b first).
+  User choices: build all of N0-N9 without stopping for review, in Python, on top of the gates,
+  Harbor export and model client. New package `factory/reference/` (profiler, scout, miner, novelty,
+  drafting, building, harbor, benchmark, review, report, run). Sub-agents are single-message calls,
+  so "a fresh context per proposal" holds by construction; the controller enforces the "must not
+  see" column through role views of the bundle (`for_drafter`, `for_author`, `for_test_writer`,
+  `for_critic`). Guide: docs/reference-pipeline.md.
+- **D70 MongoDB is the only state store** (user choice; the proposal said SQLite). Proposals,
+  research records, the benchmark queue and results live in `ref_*` collections; transitions are
+  compare-and-set on the current state; jobs are leased with a deadline and heartbeats, so a
+  restarted worker resumes expired jobs. Packages, evidence snapshots and the LLM cache stay files:
+  they are the deliverable and what a run replays from offline. Unit tests use `mongomock`.
+- **D71 v1 `factory produce` stays as the A/B baseline** (user choice). The proposal drops the
+  LLM-invents-ideas source; it remains only for the "v1 vs v2.2 on the same repo and commit"
+  comparison. `factory run` is the default.
+- **D72 Bug fixes are out** (organizer rule, proposal section 13): `tasks new --kind bugfix` is gone,
+  `add_task` (so `tasks add`, `produce`, `run`) refuses `kind = "bugfix"`, the "bug fix" tag is gone,
+  and examples/toyshop/security is a `behavior_change` (it adds input validation). The SWE miner
+  still exists as a tool but its issue-closing PRs are not a submission source.
+- **D73 C++ (CMake + CTest) as data only.** `[cpp]` in ecosystems.toml for jsoncpp; never run on a
+  real repo. Known gap: jsoncpp has one test executable registered in CMakeLists.txt (a protected
+  build file), while hidden tests must be a new file; a jsoncpp adapter needs its own rule.
+- **D74 Open points of the proposal, defaulted.** Harbor agents: `harbor run --help` (0.25) lists
+  opencode, claude-code, codex, aider, mini-swe-agent and more, so `-a <agent> -m <model>` works;
+  the default benchmark backend is still our harness, because Zone C must have no web and Harbor's
+  agent phase has the public network. Judge web access unknown: every GitHub response and LLM reply
+  is saved in the snapshot and `--replay` runs offline. K = 3 peers, 6 PRs per peer, a permissive
+  licence allow-list, bundle limits (implementation and tests 12k characters each, discussion 6k,
+  neighbouring tests 8k, docs 4k), novelty: an open upstream issue alone does not reject. Models:
+  any, per role; critics are ordered so another model family comes first and the run notes when
+  none is available.
+- **D75 Implementation choices.** (1) Recall = GitHub repository search from capability text, GitHub
+  topics and alternatives the scout model names (verified through the API); there is no web-search
+  API, so "alternatives to X" pages and awesome lists are not fetched. (2) Peer profiles are keyed by
+  the peer's last push date (from the snapshot), so replay finds them without cloning. (3) Repairs go
+  to the role that owns the failure (patch: author, without hidden-test output; tests: test writer).
+  (4) Similarity = share of our added-line 7-token shingles found in the peer diff/tests; 0.5 is
+  flagged, 0.8 is sent back as a near-copy. (5) Output layout `<out>/<task_id>/` (the five parts) with
+  `provenance/`, `reviews/`, `benchmark/`, `report.md` beside the task folders. (6) Harbor runs from
+  `HARBOR_BIN`, `harbor` on PATH, or `uvx --from harbor==0.25.* harbor` (also for `harbor-check`).
+  (7) Task ids `<repo>-<sha7>-<title slug>-<proposal id[:6]>`, the proposal id from run, peer feature
+  and draft index, the run id from repo, commit and snapshot.
+- **D76 Repair routing on evidence, parallel research (2026-11-26, user choice).** A failure where the
+  hidden tests fail WITH the reference change (G2) first goes back to the test writer with the gate's
+  reason and its own failing frames (library frames hidden: they show the reference change). A name
+  the tests use that does not exist decides the owner: not in the instruction -> test writer; promised
+  exactly as the tests reach it -> author; the instruction gives another import path -> test writer;
+  no import path stated -> author, who must state one. The same tests failing again after a test-writer
+  repair go to the author. The author states the import path of every new public name; the test writer
+  reads the existing code with tools (`repo_search`, `repo_read`, before the change) and a Python test
+  file that does not compile is sent back before any Docker run. Research runs `[reference]
+  research_lanes` agents at once (peers, starter + upstream, web; the web lane only with a search
+  provider), each with fewer turns; ideas merge in lane order, so ids stay stable on replay. Live
+  click run d6606b4f7261 before this: both builds dropped (tests called `click.option_group`, the
+  change never exported it; 4 attempts alternating blindly).
+- **D77 Builder panel (2026-11-26, user choice).** Several `[reference.models] author` / `test_writer`
+  models build as a panel: all draft at once, drafts that do not apply / compile or whose model fails
+  drop out, each remaining draft is reviewed by the other models (0-10, problems, fixes; patch
+  reviewers never see tests, test reviewers never see the patch), the best mean score is revised once
+  with its reviews, and that single package goes to the gates. Repairs stay with the chosen model;
+  the same failure twice in a row hands the repair to the next panel model. An edit whose search text
+  an earlier edit already rewrote now says which edit to merge it into (the old message gave no hint,
+  and models resent the same edit). Live click (same ideas, same snapshot): qwen3-coder-next alone
+  never passed G2; Claude Opus 4.6 alone got to 1 failing test; the panel (Opus 4.6, kimi-k2.5,
+  deepseek-v3.2) passed G0-G3 on its first attempt and failed G4 (a `to_info_dict` regression).
+  Claude Opus 4.7 and newer return HTTP 403 on this Bedrock account; Opus 4.6 works.
 
 ## Limitations
 

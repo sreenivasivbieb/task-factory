@@ -42,6 +42,45 @@
 
 - detect environment, build image, run baseline
 
+### `factory run`
+
+- the reference-guided pipeline (v2.2): profile, peers, parallel research lanes, critic + spec, build
+  (one model or a panel), gates + Harbor, background benchmark, report. See
+  [reference-pipeline.md](reference-pipeline.md).
+  Needs MongoDB (`TASK_FACTORY_MONGO_URI`). Exit 4 when fewer valid tasks than `--count`.
+
+| Option | Meaning |
+|---|---|
+| `--count` `N` | valid distinct tasks to make (default `[reference] target`, 5) |
+| `--once` | Run one finite research-and-build cycle; otherwise continue until Ctrl-C |
+| `--model` `MODEL` | model for every role not set in `[reference.models]` (repeatable) |
+| `--drafter-model`, `--critic-model` | spec writer / critic models (repeatable; a critic from another family) |
+| `--review` | turn on the optional review step before building |
+| `--peer` `OWNER/NAME` | manual peer override (repeatable) |
+| `--snapshot` `ID`, `--replay` `ID`, `--refresh` | evidence snapshot to use, replay offline, or redo the research |
+| `--harbor` `required\|if_available\|off`, `--no-harbor` | Harbor nop/oracle validation |
+| `--out` `DIR` | Harbor tasks + provenance/ reviews/ benchmark/ report |
+| `--benchmark` `AGENT[:MODEL]`, `--no-benchmark`, `--wait` | AI under test (background unless `--wait`) |
+| `--mongo-uri` `URI` | MongoDB (default `$TASK_FACTORY_MONGO_URI`) |
+
+### `factory proposals list|show|review|approve|reject|edit`
+
+- the run's task proposals (`--run RUN`, default the latest run). `review` walks pending proposals
+  (approve, edit in `$EDITOR`, reject); `reject` and `edit` need `--reason`; `edit --file F.json`
+  changes fields and sends the proposal back to the critics.
+
+### `factory benchmark worker|status|kill|enqueue`
+
+- `worker [--run RUN] [--workers N] [--exit-when-empty]`: lease and
+  run jobs; a job whose worker died is resumed when its lease runs out.
+- `status [--run RUN]`: jobs by state; solved / partial / failed per agent.
+- `kill [--off]`: the kill switch.
+- `enqueue --agent AGENT[:MODEL] [-k N] [--run RUN]`: queue the run's validated tasks.
+
+### `factory report`
+
+- writes `report.md` and `report.json` next to the run's Harbor tasks (`--run`, `--out`, `--print`).
+
 ### `factory generate`
 
 - draft and validate a task using a configured model

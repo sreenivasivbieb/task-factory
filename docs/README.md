@@ -9,6 +9,7 @@
 
 | Guide | Read it when you want to… |
 |---|---|
+| [Reference-guided pipeline](reference-pipeline.md) | Make tasks from features real peer projects shipped (`factory run`, v2.2) |
 | [Gated pipeline](gated-pipeline.md) | Create tasks from your own repository and prove them valid |
 | [SWE miner](swe-miner.md) | Turn a GitHub repository's history into SWE-bench style tasks |
 | [Coding harness](harness.md) | Run AI agents on tasks and compare models |

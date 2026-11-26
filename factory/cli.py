@@ -11,6 +11,7 @@ Command groups::
     factory tasks   list | show | approve | delete | restore | new | add | edit | publish | summary
                     assign | unassign | assignments
     factory review  (interactive)
+    factory run | proposals list|show|review|approve|reject|edit | benchmark worker|status|kill|enqueue | report
     factory harness agents | run | work   (factory bench = factory harness run)
 """
 
@@ -93,6 +94,86 @@ def build_parser() -> argparse.ArgumentParser:
     _store(p)
     _common(p)
 
+    # ---------------------------------------------------------------- reference-guided pipeline (v2.2)
+    p = sub.add_parser("run", help="reference-guided factory: profile, peers, PR bundles, novelty, drafts, "
+                                   "critics, build, Harbor, background benchmark")
+    p.add_argument("--count", type=int, default=None, help="valid distinct tasks to make (default [reference] target, 5)")
+    p.add_argument("--once", action="store_true", help="run one finite research-and-build cycle instead of continuing until interrupted")
+    p.add_argument("--model", action="append", default=[], help="model for every role not set in [reference.models] (repeatable: later models take over when one hits its quota)")
+    p.add_argument("--drafter-model", action="append", default=[], help="drafter model (repeatable: 2+ drafters)")
+    p.add_argument("--critic-model", action="append", default=[],
+                   help="critic model (repeatable; use another model family than the drafters)")
+    p.add_argument("--review", action="store_true", help="turn on the optional review step (P7) before building")
+    p.add_argument("--workers", type=int, default=None,
+                   help="sub-agent calls at the same time (default [reference] workers, 4; 1 = one after another)")
+    p.add_argument("--peer", action="append", default=[], help="manual peer override, owner/name (repeatable)")
+    p.add_argument("--snapshot", default=None, help="evidence snapshot id (default <repo>-<sha>; reused when present)")
+    p.add_argument("--replay", metavar="SNAPSHOT", default=None, help="replay a snapshot offline (no web, no new LLM calls)")
+    p.add_argument("--refresh", action="store_true", help="redo the research even where the snapshot has it")
+    p.add_argument("--harbor", choices=["required", "if_available", "off"], default=None,
+                   help="Harbor nop/oracle validation (default [reference] harbor, required)")
+    p.add_argument("--no-harbor", action="store_true", help="same as --harbor off")
+    p.add_argument("--out", type=Path, default=None, help="Harbor tasks + provenance/ reviews/ benchmark/ report")
+    p.add_argument("--benchmark", action="append", default=[], metavar="AGENT[:MODEL]",
+                   help="AI under test, run in the background after validation (repeatable)")
+    p.add_argument("--no-benchmark", action="store_true")
+    p.add_argument("--wait", action="store_true", help="run the benchmark in the foreground")
+    p.add_argument("--stop-after", choices=["research", "proposals"], default=None, help=argparse.SUPPRESS)
+    p.add_argument("--mongo-uri", default=None, help="MongoDB (default $TASK_FACTORY_MONGO_URI)")
+    _store(p)
+    _common(p)
+
+    props = sub.add_parser("proposals", help="task proposals of a run (list, show, review, approve, reject, edit)")
+    psub = props.add_subparsers(dest="action", required=True, metavar="ACTION")
+    for name, hlp in (("list", "proposals and their states"), ("show", "one proposal card"),
+                      ("review", "interactive review of pending proposals"), ("approve", "approve a pending proposal"),
+                      ("reject", "reject a pending proposal (reason required)"),
+                      ("edit", "edit a proposal from a JSON file (reason required; critics check it again)")):
+        p = psub.add_parser(name, help=hlp)
+        p.add_argument("--run", default=None, help="run id (default: the latest run)")
+        p.add_argument("--mongo-uri", default=None)
+        if name in {"show", "approve", "reject", "edit"}:
+            p.add_argument("id", help="proposal id (a unique prefix is enough)")
+        if name == "list":
+            p.add_argument("--state", default=None, help="only this state, e.g. CHECKED")
+        if name == "approve":
+            p.add_argument("--note", default=None)
+        if name in {"reject", "edit"}:
+            p.add_argument("--reason", required=True)
+        if name == "edit":
+            p.add_argument("--file", required=True, help="JSON object with the fields to change")
+        _common(p)
+
+    bench = sub.add_parser("benchmark", help="background benchmark of the AI under test (worker, status, kill, enqueue)")
+    bsub = bench.add_subparsers(dest="action", required=True, metavar="ACTION")
+    p = bsub.add_parser("worker", help="lease and run benchmark jobs (resumes jobs whose worker died)")
+    p.add_argument("--run", default=None, help="only this run's jobs")
+    p.add_argument("--workers", type=int, default=None)
+    p.add_argument("--exit-when-empty", action="store_true", help="stop when no job is left (default: keep polling)")
+    p.add_argument("--mongo-uri", default=None)
+    _common(p)
+    p = bsub.add_parser("status", help="jobs by state; solved / partial / failed per agent")
+    p.add_argument("--run", default=None)
+    p.add_argument("--mongo-uri", default=None)
+    _common(p)
+    p = bsub.add_parser("kill", help="kill switch: workers stop after their current job")
+    p.add_argument("--off", action="store_true", help="turn the kill switch off")
+    p.add_argument("--mongo-uri", default=None)
+    _common(p)
+    p = bsub.add_parser("enqueue", help="queue jobs for the run's validated tasks")
+    p.add_argument("--run", default=None)
+    p.add_argument("--agent", action="append", required=True, metavar="AGENT[:MODEL]")
+    p.add_argument("-k", type=int, default=None, help="attempts per task")
+    p.add_argument("--mongo-uri", default=None)
+    _common(p)
+
+    p = sub.add_parser("report", help="the run report: yield, peers, tasks, benchmark, declarations")
+    p.add_argument("--run", default=None)
+    p.add_argument("--out", type=Path, default=None)
+    p.add_argument("--print", action="store_true", help="print the Markdown instead of its path")
+    p.add_argument("--mongo-uri", default=None)
+    _common(p)
+
     p = sub.add_parser("harbor-check", help="run Harbor's nop (expect 0.0) and oracle (expect 1.0) on Harbor tasks")
     p.add_argument("tasks", type=Path, help="a Harbor task folder, or a folder of them")
     p.add_argument("--out", type=Path, default=None, help="logs and summary (default: <tasks>-harbor-check)")
@@ -147,7 +228,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = tsub.add_parser("new", help="create a draft folder to write your own task")
     p.add_argument("name", help="folder name for the draft")
     p.add_argument("--title", default=None)
-    p.add_argument("--kind", choices=["feature", "bugfix", "behavior_change"], default="feature")
+    p.add_argument("--kind", choices=["feature", "behavior_change"], default="feature",
+                   help="bug fixes are out of scope (organizer rule)")
     p.add_argument("--tags", default="", help="comma-separated tags")
     p.add_argument("--dir", type=Path, default=None, help="where to create it (default: <workdir>/drafts)")
     _common(p)

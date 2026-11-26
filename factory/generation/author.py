@@ -12,8 +12,26 @@ from ..model_client import ModelClient
 from ..repo.loader import export_clean
 
 
+_LINE_VALUE = re.compile(r'^(\s*[{\[]?\s*"[^"\n]+"\s*:\s*")(.*)("\s*,?\s*[}\]]?\s*)$')
+
+
+def _repair_json(text: str) -> str:
+    """Fix the slips models make in JSON: trailing commas, and unescaped quotes inside a one-line
+    string value (``"x": "use @group(name="a") here",``)."""
+    out = []
+    for line in text.splitlines():
+        m = _LINE_VALUE.match(line)
+        if m and '"' in m.group(2):
+            inner = re.sub(r'(?<!\\)"', r'\\"', m.group(2))
+            line = m.group(1) + inner + m.group(3)
+        out.append(line)
+    text = re.sub(r",(\s*[}\]])", r"\1", "\n".join(out))
+    return re.sub(r'\\(?!["\\/bfnrtu])', r"\\\\", text)  # an invalid escape such as \- becomes a backslash
+
+
 def _json_object(response: str) -> dict | None:
-    """The JSON object in a model reply: the whole reply, a ```json block, or the first {...} in the text."""
+    """The JSON object in a model reply: the whole reply, a ```json block, or the first {...} in the text;
+    each also once repaired (trailing commas, unescaped inner quotes). Control characters are allowed."""
     text = response.strip()
     candidates = [text]
     fence = re.search(r"```(?:json)?\s*\n(.*?)```", text, re.S)
@@ -21,8 +39,11 @@ def _json_object(response: str) -> dict | None:
         candidates.append(fence.group(1))
     if "{" in text:
         candidates.append(text[text.index("{"):])
-    decoder = json.JSONDecoder()
-    for candidate in candidates:
+    decoder = json.JSONDecoder(strict=False)
+    repaired = [_repair_json(c) for c in candidates]
+    # a reply cut short or missing its last braces: try closing it
+    closed = [r.rstrip().rstrip("`").rstrip() + tail for r in repaired[-1:] for tail in ("}", "}}", "]}", "}]}", '"}', '"}]}', '"]}')]
+    for candidate in candidates + repaired + closed:
         try:
             data, _ = decoder.raw_decode(candidate.strip())
         except ValueError:
@@ -154,6 +175,8 @@ EDIT_FORMAT = (
 def apply_edits(repo: Path, edits, new_files=None) -> dict[str, str]:
     """Apply search/replace edits (and whole new files) to ``repo``; returns {path: new content}."""
     overlay: dict[str, str] = {}
+    original: dict[str, str] = {}
+    touched: dict[str, list[tuple[int, str]]] = {}  # path -> (edit number, its search text)
     if edits is None:
         edits = []
     if not isinstance(edits, list) or not all(isinstance(e, dict) for e in edits):
@@ -168,15 +191,28 @@ def apply_edits(repo: Path, edits, new_files=None) -> dict[str, str]:
             if not target.is_file() or target.is_symlink():
                 raise PackageError(f"edit {i}: {path} does not exist in the repository "
                                    "(put new files in new_files)")
-            overlay[path] = target.read_text(encoding="utf-8")
+            overlay[path] = original[path] = target.read_text(encoding="utf-8")
         text = overlay[path]
         if not search.strip():
             raise PackageError(f"edit {i}: search text for {path} is empty")
         count = text.count(search)
+        if count == 0 and original.get(path, "").count(search) == 1:
+            # the lines are in the file, but an earlier edit already rewrote them: edits apply in order
+            start = original[path].index(search)
+            end = start + len(search)
+            earlier = [n for n, s in touched.get(path, [])
+                       if (k := original[path].find(s)) != -1 and k < end and start < k + len(s)]
+            by = f"edit {earlier[0]}" if earlier else "an earlier edit"
+            raise PackageError(
+                f"edit {i}: search text not found in {path}: {search[:120]!r}. These lines ARE in the original "
+                f"file, but {by} already changed them (edits apply one after another, each to the result of the "
+                f"ones before). Merge edit {i} into {by}, or make edit {i}'s search text match the file after "
+                f"{by}.")
         if count != 1:
             where = "not found" if count == 0 else f"found {count} times"
             raise PackageError(f"edit {i}: search text {where} in {path}: {search[:120]!r}")
         overlay[path] = text.replace(search, replace, 1)
+        touched.setdefault(path, []).append((i, search))
     for path, content in (new_files or {}).items():
         _relative(path)
         if not isinstance(content, str):

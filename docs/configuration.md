@@ -69,6 +69,12 @@ model_flag = "--model {model}"
 secrets = ["MY_AGENT_KEY"]                   # forwarded only when set
 ```
 
+## `[reference]`
+
+- The reference-guided pipeline (`factory run`): targets, workers, research lanes, repairs, peers,
+  licences, Harbor, and models per role (`[reference.models]`: several `author` / `test_writer`
+  models turn on the builder panel). Every key: [Reference-guided pipeline](reference-pipeline.md#configuration-reference-in-factorytoml).
+
 ## `[env]` overrides
 
 - Override what `inspect` detects; any key left out keeps the detected value.

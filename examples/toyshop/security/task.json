@@ -1,2 +1,2 @@
-{"title": "Reject tampered quantities, amounts and product text", "kind": "bugfix",
+{"title": "Reject tampered quantities, amounts and product text", "kind": "behavior_change",
  "tags": ["security", "validation rule", "edge-case handling"]}

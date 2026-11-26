@@ -88,6 +88,64 @@ class EnvOverrides(_Section):
 
 
 
+PERMISSIVE_LICENCES = ["MIT", "BSD-2-Clause", "BSD-3-Clause", "Apache-2.0", "ISC", "0BSD", "Unlicense", "Zlib",
+                       "BSL-1.0", "PSF-2.0", "MIT-0", "BlueOak-1.0.0"]
+
+
+class ReferenceModels(_Section):
+    """Models per sub-agent role (lists: several drafters/critics). Empty roles use the first model given."""
+
+    profiler: list[str] = Field(default_factory=list)
+    researcher: list[str] = Field(default_factory=list)  # the research agent (ideas, with tools)
+    scout: list[str] = Field(default_factory=list)
+    miner: list[str] = Field(default_factory=list)
+    drafter: list[str] = Field(default_factory=list)
+    critic: list[str] = Field(default_factory=list)  # put another model family here when you have one
+    author: list[str] = Field(default_factory=list)
+    test_writer: list[str] = Field(default_factory=list)
+
+
+class BenchmarkConfig(_Section):
+    agents: list[str] = Field(default_factory=list)  # AI under test, "agent" or "agent:model"; empty = no benchmark
+    k: int = 1
+    workers: int = 1
+    max_retries: int = 3
+    timeout_s: int = 3600
+    cost_cap_usd: float | None = None
+    background: bool = True  # run the worker as a detached process after validation
+
+
+class ReferenceConfig(_Section):
+    """The reference-guided pipeline (``factory run``), v2.2."""
+
+    target: int = 5  # finite-run target; continuous mode uses it to size each research batch
+    continuous: bool = True  # keep researching and producing packages until the operator stops the run
+    research_pause_s: float = 30.0  # pause between continuous rounds to avoid rapid repeated API calls
+    workers: int = 4  # sub-agent calls at the same time (profiles, miner, novelty, drafts, critics); 1 = serial
+    overgenerate: float = 2.0  # ideas per target task
+    research_rounds: int = 3  # research rounds at most, while too few ideas survive the critic
+    research_lanes: int = 3  # research agents at once (peers, starter+upstream, web); 1 = one agent, every source
+    peers_k: int = 3
+    recall: int = 25
+    shortlist: int = 8
+    prs_per_peer: int = 6
+    peers: list[str] = Field(default_factory=list)  # manual peer override, owner/name
+    licences: list[str] = Field(default_factory=lambda: list(PERMISSIVE_LICENCES))
+    min_stars: int = 50
+    max_age_days: int = 730
+    repairs: int = 3
+    auto_approve: bool = True  # False = optional review step (P7) before building
+    harbor: Literal["required", "if_available", "off"] = "required"
+    harbor_repeats: int = 2  # oracle runs (stability)
+    similarity_flag: float = 0.5
+    similarity_max: float = 0.8
+    snapshots: str | None = None  # default <workdir>/reference/snapshots
+    out: str | None = None  # Harbor tasks + provenance/ reviews/ benchmark/; default <workdir>/reference/harbor
+    mongo_uri: str | None = None  # default $TASK_FACTORY_MONGO_URI
+    models: ReferenceModels = Field(default_factory=ReferenceModels)
+    benchmark: BenchmarkConfig = Field(default_factory=BenchmarkConfig)
+
+
 class FactoryConfig(_Section):
     seed: int = 0
     workdir: str = "workdir"
@@ -95,6 +153,7 @@ class FactoryConfig(_Section):
     gates: GatesConfig = Field(default_factory=GatesConfig)
     env: EnvOverrides = Field(default_factory=EnvOverrides)
     harness: HarnessConfig = Field(default_factory=HarnessConfig)
+    reference: ReferenceConfig = Field(default_factory=ReferenceConfig)
     ecosystems: dict[str, dict] = Field(default_factory=dict)  # add/override languages, see ecosystems.toml
 
     @classmethod

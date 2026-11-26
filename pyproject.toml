@@ -17,6 +17,7 @@ task-factory = "factory.cli:main"
 
 [dependency-groups]
 dev = [
+    "mongomock>=4.3.0",
     "pytest>=8",  # MIT
 ]
 

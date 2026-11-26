@@ -140,6 +140,25 @@ report_format = "cargo-text"
 build_files = ["Cargo.toml", "Cargo.lock"]
 artifacts = ["target/"]
 
+[cpp]
+# C and C++ with CMake and CTest (e.g. open-source-parsers/jsoncpp). Data only: not yet run on a real
+# repo (see docs/decisions.md D73). CTest writes JUnit (CMake 3.21+); a single test executable means
+# the runner cannot select single tests.
+markers = ["CMakeLists.txt"]
+framework = "ctest"
+base_image = "debian:bookworm-slim"
+setup_commands = [
+  "apt-get update -qq && apt-get install -y -qq --no-install-recommends cmake g++ make python3 && rm -rf /var/lib/apt/lists/*",
+  "cmake -S . -B build -DCMAKE_BUILD_TYPE=Release >/dev/null && cmake --build build -j2 >/dev/null",
+]
+test_command = "cmake --build build -j2 >/dev/null && ctest --test-dir build --output-junit \"$PWD/{report}\""
+select = "none"
+report_format = "junit"
+test_paths = ['(^|/)test_[a-z_]+/', '(^|/)test_[^/]*\.(c|cc|cpp|cxx)$', '_test\.(c|cc|cpp|cxx)$']
+build_files = ["CMakeLists.txt", "meson.build", "meson_options.txt"]
+build_patterns = ['\.cmake$', '(^|/)CMakeLists\.txt$']
+artifacts = ["build/"]
+
 # Mutation operators of gate G6, also as data. Each error_branch rule turns a matching added
 # line (in files matching `files`) into `replace`, a statement that does nothing in that
 # language. expected_literal patterns find the values the hidden tests expect (group 1).

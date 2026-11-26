@@ -41,7 +41,8 @@ flowchart LR
   - runs non-root, read-only, 128 MB, no capabilities.
 - Every refusal is logged with the client's address and recorded per attempt (`egress_blocked`).
 - Defaults: Zen (`opencode.ai`, `*.opencode.ai`), NVIDIA, TokenRouter, OpenRouter, Anthropic, OpenAI, Groq, Bedrock.
-- Turn it off with `[harness] egress = "open"` (not recommended for benchmarks).
+- `[harness] egress = "open"` is available for non-benchmark harness work. The AI-under-test
+  benchmark refuses it, and also refuses the local sandbox and Harbor's public-network agent backend.
 - Remove the proxy: `docker rm -f $(docker ps -aq --filter label=factory-egress=1)`.
 
 ## Web tools are off

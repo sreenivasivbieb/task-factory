@@ -93,10 +93,78 @@ class OpencodeCLI:
         return text
 
 
+class BedrockConverse:
+    """A model on Amazon Bedrock (``bedrock/<model id>``) through the Converse API.
+
+    Authenticates with a Bedrock API key in ``AWS_BEARER_TOKEN_BEDROCK`` (the variable AWS SDKs read);
+    the region comes from ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` (default us-east-1). Throttling and
+    unavailable responses are retried with backoff; then a ModelProviderError lets a fallback take over.
+    """
+
+    def __init__(self, model_id: str, timeout_s: int | None = None) -> None:
+        self.model_id = model_id
+        self.region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
+        self.timeout_s = timeout_s or int(os.environ.get("FACTORY_MODEL_TIMEOUT", "600"))
+        self.max_tokens = int(os.environ.get("FACTORY_MODEL_MAX_TOKENS", "16000"))
+        self.usage = {"input_tokens": 0, "output_tokens": 0, "calls": 0}
+
+    def reply(self, messages: list[dict]) -> str:
+        import time
+        from urllib.parse import quote
+
+        key = os.environ.get("AWS_BEARER_TOKEN_BEDROCK")
+        if not key:
+            raise ConfigError("bedrock/ models need a Bedrock API key in AWS_BEARER_TOKEN_BEDROCK")
+        url = f"https://bedrock-runtime.{self.region}.amazonaws.com/model/{quote(self.model_id, safe='')}/converse"
+        body = {"messages": [{"role": "user" if m.get("role") != "assistant" else "assistant",
+                              "content": [{"text": str(m.get("content", ""))}]} for m in messages],
+                "inferenceConfig": {"maxTokens": self.max_tokens}}
+        for attempt in range(4):
+            request = Request(url, data=json.dumps(body).encode("utf-8"), method="POST",
+                              headers={"Content-Type": "application/json", "Authorization": f"Bearer {key}"})
+            try:
+                with build_opener(_NoRedirect()).open(request, timeout=self.timeout_s) as response:
+                    data = json.load(response)
+                break
+            except HTTPError as exc:
+                detail = ""
+                try:
+                    detail = json.loads(exc.read() or b"{}").get("message", "")
+                except (ValueError, OSError):
+                    pass
+                if exc.code == 400 and "maxTokens" in detail and body["inferenceConfig"]["maxTokens"] > 4096:
+                    body["inferenceConfig"]["maxTokens"] //= 2  # the model allows fewer output tokens
+                    continue
+                if exc.code in (429, 500, 502, 503, 504) and attempt < 3:
+                    time.sleep(5 * 2 ** attempt)
+                    continue
+                raise ModelProviderError(f"Bedrock {self.model_id}: HTTP {exc.code} {detail[:200]}") from exc
+            except (URLError, OSError, ValueError) as exc:
+                if attempt < 3:
+                    time.sleep(5 * 2 ** attempt)
+                    continue
+                raise ModelProviderError(f"Bedrock {self.model_id}: no response ({exc})") from exc
+        else:
+            raise ModelProviderError(f"Bedrock {self.model_id}: gave up after retries")
+        try:
+            parts = data["output"]["message"]["content"]
+        except (KeyError, TypeError) as exc:
+            raise PackageError(f"Bedrock {self.model_id} returned no message") from exc
+        text = "".join(p.get("text", "") for p in parts if isinstance(p, dict))
+        usage = data.get("usage") or {}
+        self.usage["input_tokens"] += int(usage.get("inputTokens") or 0)
+        self.usage["output_tokens"] += int(usage.get("outputTokens") or 0)
+        self.usage["calls"] += 1
+        if not text.strip():
+            raise ModelProviderError(f"Bedrock {self.model_id} returned no text (stop: {data.get('stopReason')})")
+        return text
+
+
 class ModelClient:
     def __init__(self, model: str | None):
         self.model = model or os.environ.get("FACTORY_MODEL")
-        self._cli = OpencodeCLI(self.model) if uses_opencode_cli(self.model) else None
+        self._bedrock = BedrockConverse(self.model.split("/", 1)[1]) if (self.model or "").startswith("bedrock/") else None
+        self._cli = OpencodeCLI(self.model) if self._bedrock is None and uses_opencode_cli(self.model) else None
         base = os.environ.get("FACTORY_MODEL_URL", "https://api.openai.com/v1")
         url = urlsplit(base)
         if (not url.hostname or url.username or url.password or url.query or url.fragment
@@ -145,6 +213,8 @@ class ModelClient:
         return message
 
     def reply(self, messages: list[dict]) -> str:
+        if self._bedrock is not None:
+            return self._bedrock.reply(messages)
         if self._cli is not None:
             return self._cli.reply(messages)
         content = self.complete(messages).get("content")

@@ -38,7 +38,7 @@ The task must pass every validation gate (G0-G6) before it is added.
 
 | File | What to put there |
 | --- | --- |
-| `task.json` | title, kind (`feature`, `bugfix` or `behavior_change`), tags |
+| `task.json` | title, kind (`feature` or `behavior_change`; bug fixes are out of scope), tags |
 | `requirements.md` | what to build: inputs, outputs, errors, edge cases. No hints, no test code. |
 | `after/<repo path>` | the FULL new content of every source file your reference solution changes or adds |
 | `tests/<repo path>` | the hidden tests, at the path they should have in the repo |
@@ -66,7 +66,7 @@ Describe the behaviour to add or change. Name the existing modules and functions
 """
 
 TAGS = ["validation rule", "new endpoint or command", "data transformation", "edge-case handling",
-        "error handling", "performance or caching", "config or flag", "cross-feature interaction", "bug fix",
+        "error handling", "performance or caching", "config or flag", "cross-feature interaction",
         "refactor with behaviour kept", "security", "scalability", "api design"]
 
 
@@ -119,6 +119,9 @@ def add_task(draft_dir: Path, spec: RepoSpec, env: EnvConfig, factory: SandboxFa
         n += 1
         draft = load_draft_dir(draft_dir, spec, n=n)
     meta = json.loads((draft_dir / "task.json").read_text(encoding="utf-8"))
+    if meta.get("kind") == "bugfix":
+        raise ConfigError("bug fixes are out of scope (organizer rule): a task is a feature or a behaviour "
+                          "change; set kind to feature or behavior_change")
     # A draft written by a model (task.json "model", e.g. from /generate-task) keeps that model as its
     # author, so AI-made tasks are never reported as human-authored.
     model = meta.get("model") or "human"

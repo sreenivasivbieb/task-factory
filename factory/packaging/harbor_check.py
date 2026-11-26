@@ -7,22 +7,13 @@ to ``<out>/summary.json`` and ``<out>/summary.md`` as validation evidence.
 from __future__ import annotations
 
 import json
-import os
-import shutil
 import subprocess
 import time
 from pathlib import Path
 
-from ..errors import EnvironmentProblem
+from ..reference.harbor import harbor_command, read_reward
 
 EXPECTED = {"nop": 0.0, "oracle": 1.0}
-
-
-def harbor_binary() -> str:
-    found = os.environ.get("HARBOR_BIN") or shutil.which("harbor")
-    if not found:
-        raise EnvironmentProblem('Harbor CLI not found: pip install "harbor==0.25.*" (or set HARBOR_BIN)')
-    return found
 
 
 def task_dirs(root: Path) -> list[Path]:
@@ -32,30 +23,19 @@ def task_dirs(root: Path) -> list[Path]:
     return sorted(d for d in root.iterdir() if d.is_dir() and (d / "task.toml").exists())
 
 
-def _reward(out: Path) -> float | None:
-    """The verifier's reward of the newest trial under ``out`` (one task's own folder); None = crash."""
-    files = sorted(out.glob("**/verifier/reward.txt"), key=lambda p: p.stat().st_mtime)
-    if not files:
-        return None
-    try:
-        return float(files[-1].read_text().strip())
-    except ValueError:
-        return None
-
-
-def check_task(task: Path, out: Path, harbor: str, timeout_s: int = 3600) -> dict:
+def check_task(task: Path, out: Path, harbor: list[str], timeout_s: int = 3600) -> dict:
     task_id = task.name
     row: dict = {"task_id": task_id}
     for agent, expected in EXPECTED.items():
         dest = out / agent / task_id
-        cmd = [harbor, "run", "-p", str(task), "-a", agent, "-k", "1", "-o", str(dest), "--no-delete", "-y"]
+        cmd = [*harbor, "run", "-p", str(task), "-a", agent, "-k", "1", "-o", str(dest), "--no-delete", "-y"]
         start = time.monotonic()
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
             exit_code = r.returncode
         except subprocess.TimeoutExpired:
             exit_code = None
-        reward = _reward(dest)
+        reward = read_reward(dest)
         row[agent] = {"reward": reward, "expected": expected, "ok": reward == expected, "exit_code": exit_code,
                       "seconds": round(time.monotonic() - start, 1), "logs": str(dest),
                       "command": " ".join(cmd)}
@@ -64,8 +44,8 @@ def check_task(task: Path, out: Path, harbor: str, timeout_s: int = 3600) -> dic
 
 
 def run_matrix(root: Path, out: Path, on_row=None) -> list[dict]:
-    harbor = harbor_binary()
-    version = subprocess.run([harbor, "--version"], capture_output=True, text=True).stdout.strip()
+    harbor = harbor_command()
+    version = subprocess.run([*harbor, "--version"], capture_output=True, text=True).stdout.strip()
     out = Path(out)
     out.mkdir(parents=True, exist_ok=True)
     rows = []
