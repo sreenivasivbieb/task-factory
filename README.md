@@ -11,6 +11,7 @@
 
 Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 
+**[Judges: one command → evidence](docs/hackathon.md)** ·
 [Getting started](docs/getting-started.md) ·
 [Documentation](docs/README.md) ·
 [CLI reference](docs/cli-reference.md)
@@ -25,15 +26,30 @@ Innodata AI Hackathon 2026 · Track 1: Coding Task Factory
 - **Writing those tasks by hand is slow**, and a weak task (vague request, tests that pass anyway) gives a misleading score.
 - **Task Factory automates it** and **proves each task is valid by running code**, so a broken task never reaches a benchmark.
 
+## Run the whole Track 1 pipeline
+
+```sh
+uv sync
+uv run factory pipeline configs/hackathon.toml     # Docker; add --backend local for a no-Docker smoke run
+```
+
+- **Generate → Validate → Benchmark → Report** over two repositories (Python and JavaScript), from one file.
+- Writes `submission/REPORT.md` with the validity matrix, the gate self-test, task variation, the
+  leaderboard and failure modes, plus machine-readable evidence: [Track 1 guide](docs/hackathon.md).
+- Or drive it from Claude Code over MCP: [Claude Code (MCP server)](docs/mcp.md).
+
 ## Features
 
 - **Three ways to create tasks, one package format**
   - **Reference-guided pipeline (`factory run`):** research agents find features similar projects have, a critic checks each against the real code, and a panel of models builds the package.
-  - **Gated pipeline:** a person or a model writes the task; seven gates prove it valid, including mutation testing.
+  - **Gated pipeline:** a person, a model or Claude Code (MCP) writes the task; eight gates prove it valid, including mutation testing and a spec-coverage check.
   - **SWE miner:** turns merged GitHub pull requests that close an issue into SWE-bench style tasks at the exact base commit.
 - **Validity is proven, not claimed**
   - Every check runs real tests in fresh, offline Docker containers.
-  - The tests must fail without the change, pass with it, and catch deliberately wrong versions of it.
+  - The tests must fail without the change, pass with it, and catch deliberately wrong versions of it
+    (10 mutation operators modelled on coding-model mistakes).
+  - The tests may only call names that exist or that the requirements give (no guessing games).
+  - The validator tests itself: known-bad tasks must be rejected with the expected code.
 - **Human review is built in**
   - Every valid task waits as `pending`; only approved tasks are published.
   - Deletions need a reason; manual edits are re-validated and disclosed.
@@ -58,7 +74,7 @@ flowchart LR
     R[("Repository<br/>path · git URL · zip")] --> L[Pin a commit +<br/>build the environment]
     GH[("GitHub PRs<br/>+ issues")] --> SW[SWE miner]
     L --> W["Write a task<br/>(you or a model)"]
-    W --> V{{"Gates G0–G6"}}
+    W --> V{{"Gates G0–G7"}}
     SW --> X{{"Before/after<br/>test runs"}}
     V -- valid --> S[("Task store<br/>pending")]
     X -- valid --> S
@@ -115,6 +131,9 @@ node swe/cli.ts mine https://github.com/pallets/click --max 5
 
 | Goal | Command |
 |---|---|
+| Everything: tasks, gates, self-test, publish, oracle/noop, benchmark, report | `factory pipeline configs/hackathon.toml` |
+| Rebuild the evidence report from the logs | `factory evidence --tasks DIR --out DIR` |
+| Prove the gates reject known-bad tasks | `factory selftest --fixtures tests/fixtures/tasks/python` |
 | Pin a repository and build its environment | `factory load --repo SRC` · `factory inspect` |
 | Add your own task (all gates run) | `factory tasks new NAME` · `factory tasks add DRAFT` |
 | Review tasks | `factory review` · `factory tasks approve|delete|restore ID` |
@@ -132,6 +151,8 @@ node swe/cli.ts mine https://github.com/pallets/click --max 5
 
 | Guide | What it covers |
 |---|---|
+| [Track 1 guide](docs/hackathon.md) | One command, the gates, where each judging criterion is answered |
+| [Claude Code (MCP server)](docs/mcp.md) | Drive the factory from Claude Code: pipeline, authoring, review |
 | [Getting started](docs/getting-started.md) | Install, first task, terminal, SWE miner, containers |
 | [Concepts](docs/concepts.md) | Tasks, packages, gates, review states, glossary |
 | [Gated pipeline](docs/gated-pipeline.md) | Loading, inspection, generation, the seven gates, mutation testing |
@@ -149,13 +170,16 @@ node swe/cli.ts mine https://github.com/pallets/click --max 5
 
 | Area | State |
 |---|---|
+| One-command pipeline (`factory pipeline`) and evidence report | ✅ Done |
+| Gates G0–G7, 10 mutation operators, gate self-test | ✅ Done |
+| MCP server for Claude Code | ✅ Done |
 | Gated pipeline, review, harness, Harbor export | ✅ Done |
 | Terminal (setup → generate → review → run → compare) | ✅ Done |
 | SWE miner (Python repositories) | ✅ Done |
 | Egress allowlist, MongoDB records, containers | ✅ Done |
 | SWE miner for other languages | 🔜 Planned |
 | Reference-guided pipeline: research lanes, critic, multi-model builder (`factory run`) | 🧪 Working; no click package past every gate yet |
-| Variation across many repositories | 🔜 Planned |
+| Tasks across two repositories and two languages | ✅ Done (more repositories: add them to `configs/hackathon.toml`) |
 
 - Open issues and limitations: [docs/decisions.md](docs/decisions.md#limitations)
 

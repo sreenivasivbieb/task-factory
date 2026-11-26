@@ -17,3 +17,9 @@ name = "toyshop"
 source = "tests/fixtures/toy_python_repo"
 drafts = ["examples/toyshop/*", "tests/fixtures/tasks/python/good_*"]
 selftest = "tests/fixtures/tasks/python"
+
+[[pipeline.repos]]
+name = "textkit"
+source = "tests/fixtures/toy_node_repo"
+drafts = ["examples/textkit/*", "tests/fixtures/tasks/node/good_*"]
+selftest = "tests/fixtures/tasks/node"

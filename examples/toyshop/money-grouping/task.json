@@ -1,0 +1,1 @@
+{"title": "Amounts with a currency sign and thousands separators", "kind": "behavior_change", "tags": ["parsing", "input validation", "backward compatibility", "string formatting"]}

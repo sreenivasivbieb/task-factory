@@ -115,8 +115,8 @@ def _added(files: list[FilePatch]):
                 in_text = in_string or quotes % 2 == 1
                 if quotes % 2:
                     in_string = not in_string
-                if in_text:
-                    continue
+                if in_text or line[1:].lstrip().startswith(('"""', "'''", 'r"""', "r'''")):
+                    continue  # a docstring statement cannot change behaviour
                 if line.startswith("+") and not line.startswith("+++") and not comment.match(line[1:]):
                     yield fi, hi, li, line[1:]
 
@@ -276,7 +276,7 @@ def _mutate_lines(diff: str, change, limit: int) -> list[str]:
     files = parse_patch(diff)
     out = []
     for fi, hi, li, code in _added(files):
-        if _def_re().match(code):
+        if _def_re().match(code) or code.lstrip().startswith("@"):  # decorators configure, they rarely compute
             continue
         new = change(code, _file_name(files[fi]))
         if new is None or new == code:
@@ -327,7 +327,8 @@ def negate_condition(diff: str, limit: int = 2) -> list[str]:
 
 _BOOL = {" and ": " or ", " or ": " and ", "&&": "||", "||": "&&", "True": "False", "False": "True",
          "true": "false", "false": "true"}
-_BOOL_RE = re.compile(r" and | or |&&|\|\||\b(?:True|False|true|false)\b")
+# keyword-argument literals (``sort(reverse=True)``) are configuration, so they are left alone
+_BOOL_RE = re.compile(r" and | or |&&|\|\||(?<!\w=)\b(?:True|False|true|false)\b")
 
 
 def swap_boolean(diff: str, limit: int = 2) -> list[str]:

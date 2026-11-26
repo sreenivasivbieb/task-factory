@@ -130,7 +130,7 @@ def _read_toml(path: Path) -> dict:
 
 def build_server():
     if FastMCP is None:
-        raise SystemExit("the MCP server needs the 'mcp' extra: uv sync --extra mcp  (or pip install 'mcp>=1.2')")
+        raise SystemExit("the MCP server needs the 'mcp' extra: uv sync --extra mcp  (or pip install 'mcp>=1.2,<2')")
     mcp = FastMCP("task-factory", instructions=INSTRUCTIONS)
 
     @mcp.tool()

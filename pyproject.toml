@@ -12,7 +12,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-mcp = ["mcp>=1.2"]  # MIT; the MCP server for Claude Code (factory-mcp)
+mcp = ["mcp>=1.2,<2"]  # MIT; the MCP server for Claude Code (factory-mcp); 2.x renamed FastMCP
 
 [project.scripts]
 factory = "factory.cli:main"

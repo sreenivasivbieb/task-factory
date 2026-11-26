@@ -127,6 +127,11 @@ def test_mutants_skip_docstrings():
     """A docstring mutant cannot change behaviour (an equivalent mutant would reject a good task)."""
     (m,) = swap_arithmetic(DOC_PATCH)
     assert "+    return w / h" in m and "+    Charged as w * h, never w + h." in m
+    # a one-line docstring mixing quotes and backticks is skipped as a whole
+    one_line = DOC_PATCH.replace('+    """Area of a w * h box.\n+\n+    Charged as w * h, never w + h.\n+    """',
+                                 '+    """``"12,345"`` -> 12 * 3 ``x``."""').replace("return w * h", "return w * 2")
+    (m,) = off_by_one(one_line, limit=5)
+    assert "+    return w * 3" in m and '``"12,345"`` -> 12 * 3' in m
 
 
 def test_swap_boolean():

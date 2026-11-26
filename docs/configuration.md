@@ -31,8 +31,13 @@
 | Key | Default | Meaning |
 |---|---|---|
 | `stability_repeats` | `1` | G5 repeats (use 3 for final runs) |
-| `mutations` | `["empty", "flip_comparison", "drop_error_branch"]` | G6 operators; full set: `empty`, `revert_half`, `flip_comparison`, `swap_arguments`, `drop_error_branch`, `hardcode_expected` |
+| `mutations` | `["empty", "flip_comparison", "drop_error_branch"]` | G6 operators; full set: `empty`, `revert_half`, `flip_comparison`, `swap_arguments`, `drop_error_branch`, `hardcode_expected`, `off_by_one`, `swap_arithmetic`, `negate_condition`, `swap_boolean` |
+| `min_mutation_score` | `1.0` | Share of mutants (the empty patch included) the hidden tests must catch |
+| `spec_check` | `true` | G7: hidden tests may only import names that exist or that the requirements give |
 | `max_known_failure_ratio` | `0.2` | Share of baseline tests allowed to fail already |
+
+- Pipeline files (`factory pipeline FILE`) have their own `[pipeline]` section: see `configs/hackathon.toml`
+  and the [Track 1 guide](hackathon.md).
 
 ## `[harness]`
 

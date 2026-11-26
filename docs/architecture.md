@@ -53,7 +53,10 @@ flowchart LR
 | `repo/` | Copy and pin a repository; detect its environment |
 | `sandbox/` | Isolated execution: images, containers, limits, egress proxy, file volumes |
 | `runner/` | Run tests and parse reports into stable test IDs |
-| `validation/` | The seven gates and the mutation engine |
+| `validation/` | The eight gates (`gates.py`), the mutation engine (`mutations.py`), spec coverage G7 (`spec_check.py`) |
+| `pipeline.py` | `factory pipeline FILE`: every repository → gates → self-test → publish → oracle/noop → benchmark → report |
+| `evidence.py` | `factory evidence`: `REPORT.md`, validation matrix, diversity statistics, leaderboard, failure modes |
+| `mcp_server.py` | `factory-mcp`: the MCP server that lets Claude Code operate the factory ([guide](mcp.md)) |
 | `reference/` | Reference-guided pipeline (`factory run`, v2.2): profiler, scout, research agents (parallel lanes), critic + example runner, spec writer, builder (single model or panel) with repair routing, Harbor validator, benchmark queue, MongoDB state, snapshots, report |
 | `generation/`, `model_client.py` | Model-generated task drafts (v1 `produce`, kept for the A/B comparison) |
 | `packaging/` | Write, checksum, verify and export packages |
@@ -169,6 +172,8 @@ sequenceDiagram
 | M6 | Model-generated tasks (`/generate-task`) | ✅ (prompt-driven) |
 | SWE miner | Tasks from GitHub history | ✅ (Python) |
 | M7 | Feature source: ideas from docs, TODOs, issues, history | 🔜 |
-| M8 | Variation manager: reject near-duplicates, balance tags | 🔜 |
-| M9 | Evidence report | 🔜 |
-| M10 | One-command orchestration | 🔜 |
+| M8 | Variation report: tiers, tags, multi-file share, near-duplicate check | ✅ (reported; generation-time balancing 🔜) |
+| M9 | Evidence report (`factory evidence`) | ✅ |
+| M10 | One-command orchestration (`factory pipeline`) | ✅ |
+| M11 | G7 spec coverage, semantic mutation operators, gate self-test | ✅ |
+| M12 | MCP server for Claude Code | ✅ |

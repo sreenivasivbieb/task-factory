@@ -71,16 +71,17 @@ factory tasks add workdir/drafts/my-task
 
 - Hand-written tasks pass the same gates; they are recorded as `human (your name)`.
 
-## 4. Validate: the seven gates
+## 4. Validate: the eight gates
 
 - Each gate runs in a fresh, offline container.
 - The first gate that fails rejects the task with a code; the reason goes to `rejections.jsonl`.
-- Order: G0, G1, G2, G3, G4, G6, G5 (the most expensive last).
+- Order: G0, G1, G7, G2, G3, G4, G6, G5 (static checks first, the most expensive last).
 
 | Gate | Checks | Failure code |
 |---|---|---|
 | **G0** Baseline | The original repository's tests pass | `BASELINE_FAIL` |
 | **G1** Patch applies | The reference diff applies cleanly and touches no test or test-config file | `PATCH_APPLY_FAIL`, `SOLUTION_TOUCHES_PROTECTED` |
+| **G7** Spec covers the tests | Every repository name the hidden tests import exists before the change or is named in the requirements (static, no container) | `UNDERSPECIFIED` |
 | **G2** Feature works | The new tests pass with the patch | `FEATURE_TESTS_FAIL_WITH_PATCH` |
 | **G3** Tests need the feature | The new tests fail without the patch | `FEATURE_TESTS_PASS_WITHOUT_PATCH` |
 | **G4** No regressions | Every existing test still passes | `REGRESSION` |
@@ -93,6 +94,14 @@ factory tasks add workdir/drafts/my-task
 factory validate --tasks DIR      # drafts, or published packages (re-verification)
 factory export                    # valid drafts go into the store as pending
 ```
+
+### Spec coverage (G7)
+
+- A task is ambiguous when its hidden tests call a name a solver could not know: `from toyshop.pricing
+  import BULK_MIN_QTY` when the requirements only say "add a bulk discount".
+- G7 reads the hidden tests (Python: AST; JavaScript/TypeScript: `import`/`require` of relative paths)
+  and rejects names that neither exist at the starting commit nor appear in `requirements.md`.
+- It runs before any container, so an ambiguous draft costs milliseconds. Switch: `gates.spec_check`.
 
 ### Mutation testing (G6)
 
@@ -107,11 +116,19 @@ factory export                    # valid drafts go into the store as pending
 | `swap_arguments` | `g(a, b)` | `g(b, a)` |
 | `hardcode_expected` | `return amount` | `return 900` |
 | `revert_half` | two hunks | only the first hunk |
+| `off_by_one` | `if qty >= 10:` | `if qty >= 11:` |
+| `swap_arithmetic` | `amount - discount` | `amount + discount` |
+| `negate_condition` | `if code in RATES:` | `if not (code in RATES):` |
+| `swap_boolean` | `a and b` · `x = True` | `a or b` · `x = False` |
 
-- Safety rules:
-  - Skip comments, string literals, function and import lines.
+- Safety rules (each avoids *equivalent* mutants, which cannot change behaviour):
+  - Skip comments, string literals, multi-line strings and docstrings, function and import lines.
+  - The semantic operators also skip decorators and keyword flags (`frozen=True`).
   - Drop mutants identical to the reference or to each other.
-- Choose operators with `gates.mutations`; the default is `empty`, `flip_comparison`, `drop_error_branch`.
+- Choose operators with `gates.mutations`; the default is `empty`, `flip_comparison`, `drop_error_branch`;
+  `configs/factory.strict.toml` uses all ten.
+- `gates.min_mutation_score` (default `1.0`): the share of mutants that must be caught. G6 runs every
+  mutant and lists the survivors in the report.
 - Known limit: an *equivalent* mutant (one that cannot change behaviour) survives and rejects a good task; the reject reason names it.
 
 ### Cost per task

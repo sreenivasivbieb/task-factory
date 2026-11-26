@@ -101,7 +101,10 @@ def _common(pc: PipelineConfig, workdir: Path, config: str | None) -> list[str]:
 
 
 def _draft_hash(d: Path) -> str:
+    """The draft's files plus the validator's own code: a changed gate re-checks earlier rejections."""
     h = hashlib.sha256()
+    for p in sorted((Path(__file__).parent / "validation").glob("*.py")):
+        h.update(p.read_bytes())
     for p in sorted(d.rglob("*")):
         if p.is_file() and "__pycache__" not in p.parts:
             h.update(str(p.relative_to(d)).encode())
