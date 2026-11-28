@@ -17,6 +17,8 @@ mutations = ["empty", "revert_half", "flip_comparison", "swap_arguments", "drop_
 min_mutation_score = 1.0
 # G7: the hidden tests may only call names that exist or that the requirements give
 spec_check = true
+# mutants validated at the same time (speed only; each runs in its own container)
+workers = 8
 # the starting commit must pass its whole test suite
 max_known_failure_ratio = 0.0
 

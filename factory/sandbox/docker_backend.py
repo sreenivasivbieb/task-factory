@@ -9,6 +9,7 @@ import shlex
 import shutil
 import subprocess
 import tempfile
+import threading
 import time
 import uuid
 from pathlib import Path
@@ -43,6 +44,7 @@ class DockerSandboxFactory(SandboxFactory):
         self._users: dict[str, str | None] = {}
         self._proxies: set[str] = set()
         self._volumes: set[str] = set()
+        self._lock = threading.Lock()  # G6 mutants and harness attempts start sandboxes in parallel
         self._check_available()
 
     def _check_available(self) -> None:
@@ -133,12 +135,13 @@ class DockerSandboxFactory(SandboxFactory):
 
     def _user_for(self, tag: str) -> str | None:
         """Run as the non-root 'factory' user when the image has one."""
-        if tag not in self._users:
-            r = self._run(["run", "--rm", "--network", "none", "--entrypoint", "id", tag, "-u", "factory"])
-            self._users[tag] = "factory" if r.returncode == 0 else None
-            if r.returncode != 0:
-                log.warning("image %s has no non-root user; running as root", tag)
-        return self._users[tag]
+        with self._lock:  # one probe per image, even when sandboxes start in parallel
+            if tag not in self._users:
+                r = self._run(["run", "--rm", "--network", "none", "--entrypoint", "id", tag, "-u", "factory"])
+                self._users[tag] = "factory" if r.returncode == 0 else None
+                if r.returncode != 0:
+                    log.warning("image %s has no non-root user; running as root", tag)
+            return self._users[tag]
 
     # ------------------------------------------------------------------ allowlisted egress
     # The agent's container joins an internal network (no route out). The only other member is a

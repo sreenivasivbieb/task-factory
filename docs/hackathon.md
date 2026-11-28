@@ -11,6 +11,8 @@ uv run factory pipeline configs/hackathon.toml
   build and validate tasks; benchmarking a model needs that model's key (see below).
 - The run is resumable: finished steps are skipped (`--force` redoes them). Pick steps with
   `--only` / `--skip`: `tasks`, `selftest`, `publish`, `sanity`, `benchmark`, `evidence`.
+- Docker in WSL (Windows): `bash scripts/install-docker-wsl.sh` installs Docker Engine natively in Ubuntu
+  (no Docker Desktop) and pre-pulls the base images.
 - No Docker? A smoke run without isolation: `uv run factory pipeline configs/dev-local.toml --backend local`.
 - **Windows:** run everything inside WSL (Ubuntu). Never run `uv` for this folder from a Windows shell
   (PowerShell, cmd, Git Bash): Windows `uv` replaces the Linux `.venv` and breaks any run in progress.

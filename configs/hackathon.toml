@@ -12,6 +12,7 @@ root = "workdir/pipeline"
 config = "configs/factory.strict.toml"
 harbor = true
 sanity = true
+harness_workers = 8                                 # oracle/noop attempts at the same time (speed only)
 
 # ---------------------------------------------------------------- repositories and task sources
 
